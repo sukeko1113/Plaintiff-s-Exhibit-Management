@@ -107,9 +107,10 @@ Plaintiff-s-Exhibit-Management/
 - 文中抽出版 (`normalize_koshou`) と段落全体マッチ版 (`normalize_koshou_strict`) の 2 種類
 
 ## 6. 「甲号証の単位」の判定ロジック
-- ドキュメント先頭、`pageBreakBefore`、ラン内 `<w:br w:type="page"/>`、`sectPr` を「ページ先頭相当」とみなす
-- その直後の最初の非空段落が `KOSHOU_STRICT_PATTERN` にマッチしたら甲号証の開始
-- 詳細はオリジナル仕様書（疑似コード）参照
+- 段落のテキスト全体が `KOSHOU_STRICT_PATTERN`（`【】`/`[]` で囲まれた表記も含む）にマッチしたら、その段落を 1 つの甲号証の開始位置とみなす
+- 1 つの甲号証の範囲は、当該ラベル段落から、次にラベル段落が現れる直前までの全段落
+- 改ページ（`pageBreakBefore` / `<w:br w:type="page"/>` / `sectPr`）の有無は判定に影響しない
+- 例: `【甲第０１号証】` 〜 `【甲第０２号証】` の直前まで、を 1 つの「甲号証」とする
 
 ## 7. 機能仕様（API 単位）
 バックエンドは `http://127.0.0.1:8765` でホスト。CORS は `http://localhost:5173` を許可。

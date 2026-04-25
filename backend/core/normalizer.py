@@ -18,6 +18,10 @@ _BODY = (
 KOSHOU_PATTERN = re.compile(_BODY)
 KOSHOU_STRICT_PATTERN = re.compile(r'^\s*' + _BODY + r'\s*[。．\.]?\s*$')
 
+# 段落の前後に付き得る装飾的な括弧（【】や []）を取り除くための補助パターン。
+# 「【甲第１号証】」のような表記を strict マッチさせるために使う。
+_STRIP_BRACKETS_PATTERN = re.compile(r'^\s*(?:【\s*(.*?)\s*】|\[\s*(.*?)\s*\])\s*$')
+
 
 def _to_fullwidth_padded(num: int, width: int = 3) -> str:
     return str(num).zfill(width).translate(HALFWIDTH_TO_FULLWIDTH)
@@ -73,10 +77,15 @@ def normalize_koshou_strict(text: str) -> Optional[str]:
     """段落全体が甲号証ラベルそのものの場合のみ正規化形を返す。
 
     末尾に句点（``。``、``．``、``.``）が付いている場合は許容する。
+    全体が ``【…】`` ないし ``[…]`` で囲まれている場合は括弧を取り除いてからマッチを試みる。
     本文中の言及（``…甲第3号証を参照…``）はマッチしない。
     """
     if not text:
         return None
+    bracket_match = _STRIP_BRACKETS_PATTERN.match(text)
+    if bracket_match is not None:
+        inner = bracket_match.group(1) or bracket_match.group(2) or ''
+        text = inner
     match = KOSHOU_STRICT_PATTERN.match(text)
     if match is None:
         return None

@@ -56,6 +56,11 @@ def test_normalize_koshou_negative(text) -> None:
         ('甲第１号証その２', '甲第００１号証その２'),
         ('甲第１号証。', '甲第００１号証'),
         ('甲第１号証．', '甲第００１号証'),
+        ('【甲第１号証】', '甲第００１号証'),
+        ('【甲第 １号証】', '甲第００１号証'),
+        ('【甲第２号証その１】', '甲第００２号証その１'),
+        ('  【甲第３号証】  ', '甲第００３号証'),
+        ('[甲第４号証]', '甲第００４号証'),
     ],
 )
 def test_normalize_koshou_strict_positive(text: str, expected: str) -> None:
@@ -68,6 +73,7 @@ def test_normalize_koshou_strict_positive(text: str, expected: str) -> None:
         '甲第１号証を参照',
         '本文中に甲第２号証',
         '前置き 甲第３号証 後置き',
+        '前置き【甲第３号証】後置き',
         '',
         None,
     ],

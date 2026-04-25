@@ -8,37 +8,31 @@ from __future__ import annotations
 from pathlib import Path
 
 from docx import Document
-from docx.enum.text import WD_BREAK
 
 
 FIXTURE_DIR = Path(__file__).parent / 'fixtures'
 
 
-def _add_page_break(doc: Document) -> None:
-    para = doc.add_paragraph()
-    run = para.add_run()
-    run.add_break(WD_BREAK.PAGE)
-
-
 def make_combined_fixture(path: Path) -> None:
     """3 つの甲号証を含む結合ファイルを生成する。
 
-    甲第１号証（本文 1 段落）
-    甲第２号証（本文 2 段落）
-    甲第２号証その１（本文 1 段落、表記ゆれ含む）
+    改ページの有無は分解判定に影響しない。``【甲第〇〇号証】`` 等のラベル段落
+    のみで 1 つの甲号証の単位を判定する。
+
+    甲第１号証（本文 1 段落、ラベルは括弧無し）
+    甲第２号証（本文 2 段落、ラベルは ``【】`` 付き）
+    甲第２号証その１（本文 1 段落、枝番付き）
     """
     doc = Document()
 
     doc.add_paragraph('甲第１号証')
     doc.add_paragraph('これは甲第１号証の本文です。中で甲第3号証への言及をしても誤検出されないことを期待します。')
 
-    _add_page_break(doc)
-    doc.add_paragraph('甲第２号証')
+    doc.add_paragraph('【甲第２号証】')
     doc.add_paragraph('令和8年4月1日 作成')
     doc.add_paragraph('被告（〇〇学園）作成の保護者説明会配布資料。')
 
-    _add_page_break(doc)
-    doc.add_paragraph('甲第２号証その１')
+    doc.add_paragraph('【甲第２号証その１】')
     doc.add_paragraph('続報資料（枝番付き）。')
 
     path.parent.mkdir(parents=True, exist_ok=True)

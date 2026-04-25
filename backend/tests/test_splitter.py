@@ -90,3 +90,34 @@ def test_split_raises_when_no_split_points(tmp_path: Path) -> None:
     Document().save(str(empty))
     with pytest.raises(ValueError):
         split_combined_file(empty, tmp_path / 'master')
+
+
+def test_split_uses_label_only_no_page_breaks(tmp_path: Path) -> None:
+    """改ページが一切無くても、ラベル段落だけで甲号証単位を判定できる。"""
+    combined = tmp_path / 'no_page_break.docx'
+    doc = Document()
+    doc.add_paragraph('【甲第０１号証】')
+    doc.add_paragraph('さｋｊｋふぇふぇｗｌｆ')
+    doc.add_paragraph('えｆｌうぇｌｆ')
+    doc.add_paragraph('【甲第 ０２号証】')
+    doc.add_paragraph('ｌｆｋｋｆ')
+    doc.add_paragraph('えｗｆぇ')
+    doc.save(str(combined))
+
+    out_dir = tmp_path / 'master'
+    extracted = split_combined_file(combined, out_dir)
+
+    assert [e.label for e in extracted] == ['甲第００１号証', '甲第００２号証']
+
+    first = Document(str(out_dir / '甲第００１号証.docx'))
+    first_text = [p.text for p in first.paragraphs]
+    assert first_text[0] == '【甲第０１号証】'
+    assert 'さｋｊｋふぇふぇｗｌｆ' in first_text
+    assert 'えｆｌうぇｌｆ' in first_text
+    assert all('甲第 ０２号証' not in t for t in first_text)
+
+    second = Document(str(out_dir / '甲第００２号証.docx'))
+    second_text = [p.text for p in second.paragraphs]
+    assert second_text[0] == '【甲第 ０２号証】'
+    assert 'ｌｆｋｋｆ' in second_text
+    assert 'えｗｆぇ' in second_text

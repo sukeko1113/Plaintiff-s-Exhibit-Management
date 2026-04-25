@@ -1,5 +1,8 @@
 """結合甲号証 → 個別マスタ への分解（仕様書 §6, §7.2）。
 
+「甲号証の単位」は、`【甲第xxx号証】` 等の正規化ラベルとしてマッチする段落から、
+次の同種ラベル段落の直前までとする（改ページや sectPr の有無は問わない）。
+
 安全性のために、元ファイルを丸ごとコピーしてから「自分の担当範囲外の段落」を
 削除する方式を採用する。これによりスタイル・ヘッダ・フッタ・画像参照が壊れにくい。
 """
@@ -11,7 +14,6 @@ from pathlib import Path
 from typing import List, Optional
 
 from docx import Document
-from docx.oxml.ns import qn
 
 from .normalizer import (
     label_to_filename,
@@ -32,69 +34,22 @@ class ExtractedFile:
     filename: str
 
 
-def _has_page_break_before(para) -> bool:
-    """段落自体が pageBreakBefore 設定を持つか、最初のラン直前の改ページを持つ。"""
-    pPr = para._p.find(qn('w:pPr'))
-    if pPr is not None and pPr.find(qn('w:pageBreakBefore')) is not None:
-        return True
-    for run in para.runs:
-        for br in run._element.findall(qn('w:br')):
-            if br.get(qn('w:type')) == 'page':
-                return True
-    return False
-
-
-def _previous_para_ends_with_page_break(prev_para) -> bool:
-    if prev_para is None:
-        return False
-    for run in prev_para.runs:
-        for br in run._element.findall(qn('w:br')):
-            if br.get(qn('w:type')) == 'page':
-                return True
-    pPr = prev_para._p.find(qn('w:pPr'))
-    if pPr is not None and pPr.find(qn('w:sectPr')) is not None:
-        return True
-    return False
-
-
 def find_split_points(doc: Document) -> List[SplitPoint]:
-    """結合ファイルを走査して、各甲号証の開始段落と正規化ラベルを返す。"""
-    paragraphs = doc.paragraphs
+    """結合ファイルを走査して、各甲号証の開始段落と正規化ラベルを返す。
+
+    判定ルール: 段落のテキスト全体が ``normalize_koshou_strict`` にマッチした
+    場合、その段落を 1 つの甲号証の開始位置とする。次のマッチ段落の直前までが
+    その甲号証の範囲となる。
+    """
     points: List[SplitPoint] = []
-    seen_first_label = False
-
-    for i, para in enumerate(paragraphs):
-        prev = paragraphs[i - 1] if i > 0 else None
-        is_page_top = (
-            i == 0
-            or _has_page_break_before(para)
-            or _previous_para_ends_with_page_break(prev)
-        )
-        if not is_page_top:
-            continue
-
-        target_index = i
+    for i, para in enumerate(doc.paragraphs):
         text = para.text.strip()
         if not text:
-            j = i + 1
-            while j < len(paragraphs) and not paragraphs[j].text.strip():
-                j += 1
-            if j >= len(paragraphs):
-                break
-            target_index = j
-            text = paragraphs[j].text.strip()
-
+            continue
         normalized = normalize_koshou_strict(text)
         if normalized is None:
-            if seen_first_label:
-                continue
             continue
-
-        if points and points[-1].paragraph_index == target_index:
-            continue
-        points.append(SplitPoint(paragraph_index=target_index, label=normalized))
-        seen_first_label = True
-
+        points.append(SplitPoint(paragraph_index=i, label=normalized))
     return points
 
 
@@ -142,7 +97,7 @@ def split_combined_file(combined_path: Path, output_dir: Path) -> List[Extracted
     if not points:
         raise ValueError(
             '結合甲号証ファイルから甲号証の区切りを検出できませんでした。'
-            '改ページの位置と先頭段落のラベル表記を確認してください。'
+            '【甲第〇〇号証】等のラベル段落が含まれているか確認してください。'
         )
 
     extracted: List[ExtractedFile] = []
