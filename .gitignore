@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenv
+backend/venv/
+backend/.venv/
+venv/
+.venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+.npm/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Generated fixtures (再生成可能)
+backend/tests/fixtures/sample_*.docx
+backend/tests/fixtures/sample_master/
