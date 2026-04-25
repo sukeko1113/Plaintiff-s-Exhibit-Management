@@ -14,13 +14,16 @@
 - [x] Step 2: `normalizer.py` + `tests/test_normalizer.py`（§5.4 全 14 ケース + 追加テスト）
 - [x] Step 3: `folder_setup.py` + `main.py` + `/api/setup`
 - [x] Step 4: `vendor/split_evidence_docx.py` 配置 + `splitter.py` + `tests/test_splitter.py`（8 件パス）
-- [ ] Step 5: `combiner.py` + tests
-- [ ] Step 6: `list_builder.py` + 関連 API
-- [ ] Step 7: `case_parser.py` + `/api/case/parse`
-- [ ] Step 8: `table_builder.py` + `/api/evidence-pack`
-- [ ] Step 9: `backup.py` + 全 API への組み込み
+- [x] Step 5: `combiner.py` + `tests/test_combiner.py`（5 件パス）
+- [x] Step 6: `list_builder.py` + `tests/test_list_builder.py`（7 件パス）+ 関連 API
+- [x] Step 7: `case_parser.py` + `tests/test_case_parser.py`（5 件パス）+ `/api/case/parse`
+- [x] Step 8: `table_builder.py` + `tests/test_table_builder.py`（7 件パス）+ `/api/evidence-pack`
+- [x] Step 9: `backup.py` + `tests/test_backup.py`（8 件パス）。split / list 系で組み込み済み
+- [x] Step 9.5: 全 API ルート実装 + `tests/test_api.py`（10 件パス、TestClient による E2E スモーク）
 - [ ] Step 10: フロントエンド（`v01-UI.md` ベース、無ければ §13.5 フォールバック）
 - [ ] Step 11: `start.bat` + README 完成
+
+**現在のテスト総数: 76 件全パス**
 
 ## ブロッカー
 
