@@ -1,13 +1,15 @@
-"""甲号証リスト.docx の自動作成・解析（仕様書 §7.4, §7.5）。"""
+"""甲号証リスト.docx の自動作成・解析（仕様書 v02 §4.4, §7.4, §7.5）。"""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from docx import Document
 
+from .backup import backup_paths
 from .folder_setup import (
-    backup_file,
+    LIST_TEMPLATE_COMMENT,
     get_combined_dir,
     get_list_path,
     get_master_dir,
@@ -20,8 +22,19 @@ from .normalizer import (
 from .splitter import find_split_points
 
 
+@dataclass
+class IgnoredLine:
+    line: int
+    text: str
+
+
+@dataclass
+class ParsedList:
+    labels: List[str]
+    ignored_lines: List[IgnoredLine]
+
+
 def labels_from_master(root_path: str) -> List[str]:
-    """個別マスタ内の .docx を全件走査し、正規化ラベルを昇順で返す。"""
     master = get_master_dir(root_path)
     if not master.exists():
         return []
@@ -45,62 +58,62 @@ def labels_from_master(root_path: str) -> List[str]:
 
 
 def labels_from_combined_file(combined_path: Path) -> List[str]:
-    """結合甲号証ファイルから含まれる甲号証ラベルを抽出して返す。"""
     doc = Document(str(combined_path))
-    points = find_split_points(doc)
-    return [p.label for p in points]
+    return [p.label for p in find_split_points(doc)]
 
 
-def write_list_file(root_path: str, labels: List[str]) -> Path:
-    """甲号証リスト.docx を上書き保存する。既存があればバックアップ。"""
+def write_list_file(
+    root_path: str, labels: List[str], with_comment: bool = True
+) -> tuple[Path, Optional[Path]]:
+    """甲号証リスト.docx を上書き保存し、(保存先, バックアップ世代) を返す。"""
     list_path = get_list_path(root_path)
-    backup_file(list_path)
+    backup_generation = backup_paths(root_path, [list_path]) if list_path.exists() else None
+
     doc = Document()
+    if with_comment:
+        doc.add_paragraph(LIST_TEMPLATE_COMMENT)
     for label in labels:
         doc.add_paragraph(label)
     doc.save(str(list_path))
-    return list_path
+    return list_path, backup_generation
 
 
-def parse_list_file(root_path: str) -> List[str]:
-    """甲号証リスト.docx を読み、各行のラベルを正規化して返す。
-
-    1 行が 1 ラベル形式（仕様書 §7.4 / 確定仕様）。
-    正規化に失敗した行はスキップする。
-    """
+def parse_list_file(root_path: str) -> ParsedList:
+    """甲号証リスト.docx を読み、ラベルと無視行を返す。"""
     list_path = get_list_path(root_path)
     if not list_path.exists():
-        return []
+        return ParsedList(labels=[], ignored_lines=[])
     doc = Document(str(list_path))
     labels: List[str] = []
+    ignored: List[IgnoredLine] = []
     seen: set[str] = set()
-    for para in doc.paragraphs:
+    for index, para in enumerate(doc.paragraphs, start=1):
         text = para.text.strip()
         if not text:
             continue
         normalized = normalize_koshou_strict(text)
         if normalized is None:
-            from .normalizer import normalize_koshou
-            normalized = normalize_koshou(text)
-        if normalized is None:
+            ignored.append(IgnoredLine(line=index, text=text))
             continue
         if normalized in seen:
             continue
         seen.add(normalized)
         labels.append(normalized)
-    return labels
+    return ParsedList(labels=labels, ignored_lines=ignored)
 
 
-def auto_create_from_master(root_path: str) -> List[str]:
+def auto_create_from_master(root_path: str) -> tuple[List[str], Optional[Path]]:
     labels = labels_from_master(root_path)
-    write_list_file(root_path, labels)
-    return labels
+    _, backup = write_list_file(root_path, labels)
+    return labels, backup
 
 
-def auto_create_from_combined(root_path: str, combined_filename: str) -> List[str]:
+def auto_create_from_combined(
+    root_path: str, combined_filename: str
+) -> tuple[List[str], Optional[Path]]:
     combined_path = get_combined_dir(root_path) / combined_filename
     if not combined_path.exists():
         raise FileNotFoundError(f'結合甲号証ファイルが見つかりません: {combined_path}')
     labels = labels_from_combined_file(combined_path)
-    write_list_file(root_path, labels)
-    return labels
+    _, backup = write_list_file(root_path, labels)
+    return labels, backup

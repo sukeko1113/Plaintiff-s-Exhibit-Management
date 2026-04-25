@@ -1,12 +1,9 @@
-"""個別マスタ → 結合甲号証 への結合（仕様書 §7.6）。
-
-docxcompose を使い、書式・画像・スタイルを保ったまま順に結合する。
-2 つ目以降のファイルの先頭には改ページを挿入する。
-"""
+"""個別マスタ → 結合甲号証 への結合（仕様書 v02 §7.6）。"""
 from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -23,6 +20,18 @@ class CombineResult:
     output_path: Path
     missing: List[str]
     used: List[str]
+    backup_generation: Optional[Path] = None
+
+
+def auto_filename(root_name: str, kind: str) -> str:
+    """``<root_name>_甲号証_<kind>_YYYYMMDD-HHMMSS.docx`` 形式のファイル名を作る。"""
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    safe_root = root_name.strip() or 'output'
+    return f'{safe_root}_甲号証_{kind}_{stamp}.docx'
+
+
+def ensure_docx_extension(name: str) -> str:
+    return name if name.lower().endswith('.docx') else f'{name}.docx'
 
 
 def _has_leading_page_break(para) -> bool:
@@ -34,7 +43,6 @@ def _has_leading_page_break(para) -> bool:
 
 
 def _ensure_starts_with_page_break(path: Path) -> None:
-    """ファイル先頭の最初の段落にページブレイクを挿入する。"""
     doc = Document(str(path))
     if not doc.paragraphs:
         para = doc.add_paragraph()
@@ -53,11 +61,6 @@ def combine_files(
     output_path: Path,
     head_doc: Optional[Path] = None,
 ) -> CombineResult:
-    """labels の順序で個別マスタを結合し、output_path に保存する。
-
-    ``head_doc`` が指定されていれば、その文書を冒頭に置き、その後に各甲号証を続ける。
-    各甲号証のコピーには先頭に改ページを挿入する。
-    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     available: List[tuple[str, Path]] = []

@@ -1,6 +1,7 @@
 """甲号証ラベルの表記ゆれ正規化モジュール（最重要）。
 
-仕様書 §5 に従い、`甲第<全角3桁>号証[その<全角>]` 形式へ変換する。
+仕様書 v02 §5 に従い、`甲第<全角3桁>号証[その<全角>]` 形式へ変換する。
+隅付き括弧 【...】 が付いた表記も剥がして同じラベルへ正規化する。
 """
 from __future__ import annotations
 
@@ -10,13 +11,28 @@ from typing import Optional
 FULLWIDTH_TO_HALFWIDTH = str.maketrans('０１２３４５６７８９', '0123456789')
 HALFWIDTH_TO_FULLWIDTH = str.maketrans('0123456789', '０１２３４５６７８９')
 
+# 文中抽出用：【】の有無は問わず本体だけ捕捉する
 _BODY = (
     r'甲\s*(?:第)?\s*([0-9０-９]{1,3})\s*号証'
     r'(?:\s*(?:その|の|枝)\s*([0-9０-９]+))?'
 )
 
 KOSHOU_PATTERN = re.compile(_BODY)
-KOSHOU_STRICT_PATTERN = re.compile(r'^\s*' + _BODY + r'\s*[。．\.]?\s*$')
+
+# 段落全体マッチ：前後の括弧・空白・句点を許容
+KOSHOU_STRICT_PATTERN = re.compile(
+    r'^\s*【?\s*' + _BODY + r'\s*】?\s*[。．\.]?\s*$'
+)
+
+# 区切りマーカー：v02 §6.5
+MARKER_BRACKETED_PATTERN = re.compile(
+    r'^\s*【\s*甲\s*(?:第)?\s*[0-9０-９]{1,3}\s*号証'
+    r'(?:\s*(?:その|の|枝)\s*[0-9０-９]+)?\s*】\s*$'
+)
+MARKER_BARE_STRICT_PATTERN = re.compile(
+    r'^\s*甲\s*(?:第)?\s*[0-9０-９]{1,3}\s*号証'
+    r'(?:\s*(?:その|の|枝)\s*[0-9０-９]+)?\s*$'
+)
 
 
 def _to_fullwidth_padded(num: int, width: int = 3) -> str:
@@ -57,10 +73,7 @@ def parse_match(match: re.Match) -> Optional[str]:
 
 
 def normalize_koshou(text: str) -> Optional[str]:
-    """文字列から最初に現れる甲号証ラベルを抽出して正規化する。
-
-    マッチしなければ ``None``。本文中の言及からも抽出するため、文中検索版。
-    """
+    """文字列から最初に現れる甲号証ラベルを抽出して正規化する（隅付き括弧も剥がす）。"""
     if not text:
         return None
     match = KOSHOU_PATTERN.search(text)
@@ -70,11 +83,7 @@ def normalize_koshou(text: str) -> Optional[str]:
 
 
 def normalize_koshou_strict(text: str) -> Optional[str]:
-    """段落全体が甲号証ラベルそのものの場合のみ正規化形を返す。
-
-    末尾に句点（``。``、``．``、``.``）が付いている場合は許容する。
-    本文中の言及（``…甲第3号証を参照…``）はマッチしない。
-    """
+    """段落全体が甲号証ラベル（前後の【】・空白・句点を許容）の場合のみ正規化形を返す。"""
     if not text:
         return None
     match = KOSHOU_STRICT_PATTERN.match(text)
@@ -83,14 +92,24 @@ def normalize_koshou_strict(text: str) -> Optional[str]:
     return parse_match(match)
 
 
+def is_bracketed_marker(text: str) -> bool:
+    """段落テキストが 【甲第xxx号証】 形式の区切りマーカーか。"""
+    if not text:
+        return False
+    return MARKER_BRACKETED_PATTERN.match(text) is not None
+
+
+def is_bare_marker(text: str) -> bool:
+    """段落テキストが括弧なしの単独行マーカーか（フォールバック判定用）。"""
+    if not text:
+        return False
+    return MARKER_BARE_STRICT_PATTERN.match(text) is not None
+
+
 _SORT_KEY_PATTERN = re.compile(r'^甲第([０-９]{3})号証(?:その([０-９]+))?$')
 
 
 def koshou_sort_key(label: str) -> tuple[int, int]:
-    """正規化済みラベルからソート用のキーを返す。
-
-    本体番号で昇順、同一本体番号内では枝番昇順（枝なしは 0 として最初に来る）。
-    """
     match = _SORT_KEY_PATTERN.match(label)
     if match is None:
         return (10**9, 10**9)
@@ -102,12 +121,10 @@ def koshou_sort_key(label: str) -> tuple[int, int]:
 
 
 def label_to_filename(label: str) -> str:
-    """正規化済みラベルからファイル名（拡張子付き）を作る。"""
     return f'{label}.docx'
 
 
 def filename_to_label(filename: str) -> Optional[str]:
-    """ファイル名から正規化ラベルを取り出す。失敗したら ``None``。"""
     stem = filename
     for ext in ('.docx', '.DOCX'):
         if stem.endswith(ext):

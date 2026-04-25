@@ -5,6 +5,8 @@ import pytest
 
 from backend.core.normalizer import (
     filename_to_label,
+    is_bare_marker,
+    is_bracketed_marker,
     koshou_sort_key,
     label_to_filename,
     normalize_koshou,
@@ -28,6 +30,8 @@ from backend.core.normalizer import (
         ('参考: 甲第5号証 を引用', '甲第００５号証'),
         ('甲第123号証', '甲第１２３号証'),
         ('甲999号証', '甲第９９９号証'),
+        ('【甲第１号証】', '甲第００１号証'),
+        ('【甲第０１２号証その１】', '甲第０１２号証その１'),
     ],
 )
 def test_normalize_koshou_positive(text: str, expected: str) -> None:
@@ -56,6 +60,8 @@ def test_normalize_koshou_negative(text) -> None:
         ('甲第１号証その２', '甲第００１号証その２'),
         ('甲第１号証。', '甲第００１号証'),
         ('甲第１号証．', '甲第００１号証'),
+        ('【甲第１号証】', '甲第００１号証'),
+        ('  【 甲第０１２号証その１ 】  ', '甲第０１２号証その１'),
     ],
 )
 def test_normalize_koshou_strict_positive(text: str, expected: str) -> None:
@@ -106,3 +112,35 @@ def test_filename_to_label() -> None:
     assert filename_to_label('甲第１号証.docx') == '甲第００１号証'
     assert filename_to_label('甲01号証.docx') == '甲第００１号証'
     assert filename_to_label('readme.txt') is None
+
+
+@pytest.mark.parametrize(
+    'text',
+    [
+        '【甲第１号証】',
+        '【 甲第０１２号証その１ 】',
+        '【甲12号証】',
+    ],
+)
+def test_is_bracketed_marker_positive(text: str) -> None:
+    assert is_bracketed_marker(text) is True
+
+
+@pytest.mark.parametrize(
+    'text',
+    [
+        '甲第１号証',
+        '【甲第１号証】を参照',
+        '前【甲第１号証】後',
+        '',
+    ],
+)
+def test_is_bracketed_marker_negative(text: str) -> None:
+    assert is_bracketed_marker(text) is False
+
+
+def test_is_bare_marker_distinguishes_bracket() -> None:
+    assert is_bare_marker('甲第１号証') is True
+    assert is_bare_marker('  甲第１号証その２  ') is True
+    assert is_bare_marker('【甲第１号証】') is False
+    assert is_bare_marker('甲第１号証 を参照') is False

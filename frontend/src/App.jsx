@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   FileText,
+  FlaskConical,
   FolderOpen,
   Hourglass,
   Layers,
@@ -28,6 +29,7 @@ const ICONS = {
   info: <Hourglass className="w-4 h-4 text-amber-500" />,
   ok: <CheckCircle2 className="w-4 h-4 text-emerald-600" />,
   err: <XCircle className="w-4 h-4 text-rose-600" />,
+  warn: <AlertTriangle className="w-4 h-4 text-amber-600" />,
 };
 
 function useLog() {
@@ -90,6 +92,21 @@ function ConfirmModal({ open, title, body, onCancel, onConfirm, confirmLabel = '
   );
 }
 
+function DryRunToggle({ checked, onChange, disabled }) {
+  return (
+    <label className="inline-flex items-center gap-1 text-xs text-slate-700">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
+      />
+      <FlaskConical className="w-3.5 h-3.5 text-amber-600" />
+      dry-run（試行モード）
+    </label>
+  );
+}
+
 function EvidenceTableEditor({ rows, onChange }) {
   if (!rows.length) return null;
   const updateCell = (idx, key, value) => {
@@ -135,21 +152,32 @@ export default function App() {
   const { log, push, clear: clearLog } = useLog();
   const [rootPath, setRootPath] = useState('');
   const [busy, setBusy] = useState(false);
-  const [summary, setSummary] = useState({ masterCount: 0, listCount: 0 });
+  const [summary, setSummary] = useState({
+    master_count: 0,
+    list_label_count: 0,
+    combined_files_count: 0,
+    backup_generations: 0,
+  });
 
   const [combinedFiles, setCombinedFiles] = useState([]);
   const [selectedCombined, setSelectedCombined] = useState('');
 
   const [listLabels, setListLabels] = useState([]);
+  const [ignoredLines, setIgnoredLines] = useState([]);
   const [listSource, setListSource] = useState('master');
 
-  const [combineFilename, setCombineFilename] = useState('結合甲号証.docx');
+  const [combineFilename, setCombineFilename] = useState('');
   const [includeTable, setIncludeTable] = useState(false);
 
   const [caseFile, setCaseFile] = useState('');
   const [caseLabels, setCaseLabels] = useState([]);
   const [caseTableRows, setCaseTableRows] = useState([]);
-  const [caseOutput, setCaseOutput] = useState('結合甲号証_完成.docx');
+  const [caseOutput, setCaseOutput] = useState('');
+
+  const [splitDryRun, setSplitDryRun] = useState(false);
+  const [combineDryRun, setCombineDryRun] = useState(false);
+  const [listDryRun, setListDryRun] = useState(false);
+  const [caseDryRun, setCaseDryRun] = useState(false);
 
   const [splitConfirm, setSplitConfirm] = useState(false);
   const [pendingSplit, setPendingSplit] = useState(null);
@@ -188,12 +216,26 @@ export default function App() {
         api.combinedList(path),
         api.listParse(path),
       ]);
-      setSummary({ masterCount: m.files.length, listCount: l.count });
-      setCombinedFiles(c.files);
-      setSelectedCombined((prev) => (c.files.includes(prev) ? prev : c.files[0] ?? ''));
+      setCombinedFiles((c.files || []).map((f) => f.filename));
+      setSelectedCombined((prev) => {
+        const names = (c.files || []).map((f) => f.filename);
+        return names.includes(prev) ? prev : names[0] ?? '';
+      });
       setListLabels(l.labels);
+      setIgnoredLines(l.ignored_lines || []);
+      setSummary({
+        master_count: m.files.length,
+        list_label_count: l.count,
+        combined_files_count: (c.files || []).length,
+        backup_generations: summary.backup_generations,
+      });
+      if (m.duplicates && m.duplicates.length > 0) {
+        m.duplicates.forEach((d) =>
+          push('warn', `重複検出: ${d.label} → ${d.filenames.join(', ')}`),
+        );
+      }
     },
-    [rootPath],
+    [rootPath, push, summary.backup_generations],
   );
 
   const handleSetup = async () => {
@@ -201,6 +243,13 @@ export default function App() {
     await run('設定・構成確認', async () => {
       const res = await api.setup(rootPath);
       res.messages.forEach((m) => push('ok', m));
+      if (res.summary) {
+        setSummary(res.summary);
+        push(
+          'info',
+          `サマリー: マスタ ${res.summary.master_count} 件 / リスト ${res.summary.list_label_count} 行 / 結合 ${res.summary.combined_files_count} 件 / バックアップ ${res.summary.backup_generations} 世代`,
+        );
+      }
       await refreshSummary();
     });
   };
@@ -211,6 +260,14 @@ export default function App() {
       push('err', '分解する結合甲号証ファイルを選択してください。');
       return;
     }
+    if (splitDryRun) {
+      await run('分解 dry-run', async () => {
+        const res = await api.split(rootPath, selectedCombined, false, true);
+        push('info', `抽出予定: ${res.preview_labels.length} 件`);
+        res.preview_labels.forEach((l) => push('ok', `→ ${l}`));
+      });
+      return;
+    }
     await run('結合甲号証の分解', async () => {
       const master = await api.masterList(rootPath);
       if (!master.is_empty) {
@@ -219,8 +276,9 @@ export default function App() {
         push('info', '個別マスタが空ではありません。確認モーダルで選択してください。');
         return;
       }
-      const res = await api.split(rootPath, selectedCombined, true);
+      const res = await api.split(rootPath, selectedCombined, true, false);
       res.extracted.forEach((e) => push('ok', `→ ${e.label}`));
+      if (res.backup_path) push('info', `バックアップ: ${res.backup_path}`);
       await refreshSummary();
     });
   };
@@ -230,9 +288,10 @@ export default function App() {
     const target = pendingSplit?.combined;
     setPendingSplit(null);
     if (!target) return;
-    await run('個別マスタを消去して分解', async () => {
-      const res = await api.split(rootPath, target, true);
+    await run('個別マスタを退避して分解', async () => {
+      const res = await api.split(rootPath, target, true, false);
       res.extracted.forEach((e) => push('ok', `→ ${e.label}`));
+      if (res.backup_path) push('info', `バックアップ: ${res.backup_path}`);
       await refreshSummary();
     });
   };
@@ -248,29 +307,32 @@ export default function App() {
       push('err', '結合甲号証ファイルを選択してください。');
       return;
     }
-    await run('甲号証リストの自動作成', async () => {
+    await run(listDryRun ? 'リスト自動作成 dry-run' : '甲号証リストの自動作成', async () => {
       const res = await api.listAutoCreate(
         rootPath,
         listSource,
         listSource === 'combined' ? selectedCombined : undefined,
+        listDryRun,
       );
-      push('ok', `${res.count} 件のラベルを書き出しました。`);
-      await refreshSummary();
+      push('ok', `${res.count} 件のラベル${listDryRun ? '（dry-run プレビュー）' : 'を書き出しました'}。`);
+      if (res.backup_path) push('info', `バックアップ: ${res.backup_path}`);
+      if (!listDryRun) await refreshSummary();
     });
   };
 
   const handleCombine = async () => {
     if (!ensureRoot()) return;
-    if (!combineFilename.trim()) {
-      push('err', '出力ファイル名を入力してください。');
-      return;
-    }
-    await run('個別マスタの結合', async () => {
-      const res = await api.combine(rootPath, combineFilename.trim(), includeTable);
-      push('ok', `保存先: ${res.output_path}`);
-      if (res.missing.length)
-        push('err', `不足ファイル: ${res.missing.join(', ')}`);
-      await refreshSummary();
+    await run(combineDryRun ? '結合 dry-run' : '個別マスタの結合', async () => {
+      const res = await api.combine(
+        rootPath,
+        combineFilename.trim() || null,
+        includeTable,
+        combineDryRun,
+      );
+      push('ok', `保存先${combineDryRun ? '（予定）' : ''}: ${res.output_path}`);
+      if (res.missing.length) push('err', `不足ファイル: ${res.missing.join(', ')}`);
+      if (res.backup_path) push('info', `バックアップ: ${res.backup_path}`);
+      if (!combineDryRun) await refreshSummary();
     });
   };
 
@@ -301,21 +363,19 @@ export default function App() {
       push('err', '案件ファイルを指定してください。');
       return;
     }
-    if (!caseOutput.trim()) {
-      push('err', '出力ファイル名を入力してください。');
-      return;
-    }
-    await run('案件ファイル基準の結合甲号証作成', async () => {
+    await run(caseDryRun ? '案件結合 dry-run' : '案件ファイル基準の結合甲号証作成', async () => {
       const res = await api.caseBuildCombined(
         rootPath,
         caseFile.trim(),
-        caseOutput.trim(),
+        caseOutput.trim() || null,
         caseTableRows,
+        caseDryRun,
+        false,
       );
-      push('ok', `保存先: ${res.output_path}`);
-      if (res.missing.length)
-        push('err', `不足ファイル: ${res.missing.join(', ')}`);
-      await refreshSummary();
+      push('ok', `保存先${caseDryRun ? '（予定）' : ''}: ${res.output_path}`);
+      if (res.missing.length) push('err', `不足ファイル: ${res.missing.join(', ')}`);
+      if (res.backup_path) push('info', `バックアップ: ${res.backup_path}`);
+      if (!caseDryRun) await refreshSummary();
     });
   };
 
@@ -323,38 +383,53 @@ export default function App() {
     if (!ensureRoot()) return;
     if (!window.confirm('個別マスタの全ファイルを削除します。よろしいですか？')) return;
     await run('個別マスタを空にする', async () => {
-      await api.masterClear(rootPath);
+      const res = await api.masterClear(rootPath, false);
+      if (res.backup_path) push('info', `バックアップ: ${res.backup_path}`);
+      push('ok', res.message ?? '完了');
       await refreshSummary();
     });
   };
 
+  const handleOpenBackup = async () => {
+    if (!ensureRoot()) return;
+    await run('_backup フォルダを開く', () => api.openBackup(rootPath));
+  };
+
   const summaryNode = useMemo(
     () => (
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
         <div className="rounded bg-slate-50 border border-slate-200 px-3 py-2">
-          個別マスタ: <span className="font-bold">{summary.masterCount}</span> 件
+          個別マスタ: <span className="font-bold">{summary.master_count}</span> 件
         </div>
         <div className="rounded bg-slate-50 border border-slate-200 px-3 py-2">
-          リスト行数: <span className="font-bold">{summary.listCount}</span>
+          リスト行数: <span className="font-bold">{summary.list_label_count}</span>
         </div>
         <div className="rounded bg-slate-50 border border-slate-200 px-3 py-2">
-          結合甲号証ファイル数: <span className="font-bold">{combinedFiles.length}</span>
+          結合甲号証: <span className="font-bold">{summary.combined_files_count}</span> 件
+        </div>
+        <div className="rounded bg-slate-50 border border-slate-200 px-3 py-2">
+          バックアップ: <span className="font-bold">{summary.backup_generations}</span> 世代
         </div>
       </div>
     ),
-    [summary, combinedFiles],
+    [summary],
   );
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
-      <header className="bg-slate-900 text-white px-6 py-4 shadow">
-        <h1 className="text-lg font-bold flex items-center gap-2">
-          <FileText className="w-5 h-5" />
-          甲号証管理アプリ
-        </h1>
-        <p className="text-xs text-slate-300 mt-0.5">
-          訴訟用 甲号証 の結合・分解・一覧表作成を半自動化します。
-        </p>
+      <header className="bg-slate-900 text-white px-6 py-4 shadow flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-bold flex items-center gap-2">
+            <FileText className="w-5 h-5" />
+            甲号証管理アプリ <span className="text-xs text-slate-400">v02</span>
+          </h1>
+          <p className="text-xs text-slate-300 mt-0.5">
+            訴訟用 甲号証 の結合・分解・一覧表作成を半自動化します。
+          </p>
+        </div>
+        <Btn kind="secondary" icon={FolderOpen} onClick={handleOpenBackup} disabled={!rootPath || busy}>
+          _backup を開く
+        </Btn>
       </header>
 
       <main className="max-w-6xl mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -369,7 +444,12 @@ export default function App() {
             <Btn icon={Settings} onClick={handleSetup} disabled={busy}>
               設定・構成確認
             </Btn>
-            <Btn kind="secondary" icon={RefreshCcw} onClick={() => refreshSummary()} disabled={busy || !rootPath}>
+            <Btn
+              kind="secondary"
+              icon={RefreshCcw}
+              onClick={() => refreshSummary()}
+              disabled={busy || !rootPath}
+            >
               情報を再取得
             </Btn>
           </div>
@@ -393,11 +473,17 @@ export default function App() {
               </option>
             ))}
           </select>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 flex-wrap items-center">
             <Btn icon={Scissors} onClick={handleSplitClick} disabled={busy || !selectedCombined}>
               結合甲号証の分解
             </Btn>
-            <Btn kind="danger" icon={Trash2} onClick={handleClearMaster} disabled={busy || !rootPath}>
+            <DryRunToggle checked={splitDryRun} onChange={setSplitDryRun} disabled={busy} />
+            <Btn
+              kind="danger"
+              icon={Trash2}
+              onClick={handleClearMaster}
+              disabled={busy || !rootPath}
+            >
               個別マスタを空にする
             </Btn>
           </div>
@@ -405,7 +491,12 @@ export default function App() {
 
         <Section title="③ 甲号証リスト操作" icon={ListChecks}>
           <div className="flex gap-2 flex-wrap items-center">
-            <Btn kind="secondary" icon={FolderOpen} onClick={handleListOpen} disabled={busy || !rootPath}>
+            <Btn
+              kind="secondary"
+              icon={FolderOpen}
+              onClick={handleListOpen}
+              disabled={busy || !rootPath}
+            >
               甲号証リストを Word で開く
             </Btn>
             <select
@@ -420,6 +511,7 @@ export default function App() {
             <Btn icon={Wand2} onClick={handleListAutoCreate} disabled={busy || !rootPath}>
               リスト自動作成
             </Btn>
+            <DryRunToggle checked={listDryRun} onChange={setListDryRun} disabled={busy} />
           </div>
           <div className="border border-slate-200 rounded p-2 max-h-40 overflow-auto bg-slate-50">
             {listLabels.length ? (
@@ -434,6 +526,18 @@ export default function App() {
               <p className="text-xs text-slate-500">甲号証リストは空です。</p>
             )}
           </div>
+          {ignoredLines.length > 0 && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              <p className="font-semibold">無視された行:</p>
+              <ul className="list-disc pl-4">
+                {ignoredLines.slice(0, 5).map((i) => (
+                  <li key={i.line}>
+                    L{i.line}: {i.text}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Section>
 
         <Section title="④ 個別マスタ → 結合甲号証" icon={Layers}>
@@ -442,7 +546,7 @@ export default function App() {
               className="flex-1 min-w-[12rem] px-3 py-2 rounded border border-slate-300 text-sm"
               value={combineFilename}
               onChange={(e) => setCombineFilename(e.target.value)}
-              placeholder="出力ファイル名 (例: 結合甲号証.docx)"
+              placeholder="出力ファイル名（空欄で自動生成）"
             />
             <label className="text-xs text-slate-700 flex items-center gap-1">
               <input
@@ -453,9 +557,12 @@ export default function App() {
               証拠説明書テーブルを先頭に追加
             </label>
           </div>
-          <Btn icon={Layers} onClick={handleCombine} disabled={busy || !rootPath}>
-            個別マスタの結合
-          </Btn>
+          <div className="flex items-center gap-3">
+            <Btn icon={Layers} onClick={handleCombine} disabled={busy || !rootPath}>
+              個別マスタの結合
+            </Btn>
+            <DryRunToggle checked={combineDryRun} onChange={setCombineDryRun} disabled={busy} />
+          </div>
         </Section>
 
         <Section title="⑤ 案件ファイル基準で結合 + 証拠説明書" icon={Sparkles}>
@@ -467,15 +574,20 @@ export default function App() {
               value={caseFile}
               onChange={(e) => setCaseFile(e.target.value)}
             />
-            <div className="flex gap-2 flex-wrap">
-              <Btn kind="secondary" icon={Pencil} onClick={handleCaseParse} disabled={busy || !caseFile}>
+            <div className="flex gap-2 flex-wrap items-center">
+              <Btn
+                kind="secondary"
+                icon={Pencil}
+                onClick={handleCaseParse}
+                disabled={busy || !caseFile}
+              >
                 号証を抽出
               </Btn>
               <input
                 className="flex-1 min-w-[12rem] px-3 py-2 rounded border border-slate-300 text-sm"
                 value={caseOutput}
                 onChange={(e) => setCaseOutput(e.target.value)}
-                placeholder="出力ファイル名"
+                placeholder="出力ファイル名（空欄で自動生成）"
               />
               <Btn
                 kind="accent"
@@ -485,6 +597,7 @@ export default function App() {
               >
                 結合甲号証を作成
               </Btn>
+              <DryRunToggle checked={caseDryRun} onChange={setCaseDryRun} disabled={busy} />
             </div>
             {caseLabels.length > 0 && (
               <p className="text-xs text-slate-600">
@@ -509,7 +622,11 @@ export default function App() {
                 <div
                   key={i}
                   className={`flex items-start gap-2 ${
-                    entry.kind === 'err' ? 'text-rose-600' : 'text-slate-700'
+                    entry.kind === 'err'
+                      ? 'text-rose-600'
+                      : entry.kind === 'warn'
+                        ? 'text-amber-700'
+                        : 'text-slate-700'
                   }`}
                 >
                   <span className="text-slate-400">[{entry.time}]</span>
@@ -524,14 +641,14 @@ export default function App() {
 
       <ConfirmModal
         open={splitConfirm}
-        title="個別マスタを上書きします"
-        body={`現在、個別マスタには ${summary.masterCount} 件のファイルが存在します。\n分解を続けるとこれらは すべて削除 されます。よろしいですか？`}
+        title="個別マスタを退避してから上書きします"
+        body={`現在、個別マスタには ${summary.master_count} 件のファイルが存在します。\n_backup へ退避してから分解を実行します。`}
         onCancel={() => {
           setSplitConfirm(false);
           setPendingSplit(null);
         }}
         onConfirm={confirmSplit}
-        confirmLabel="消去して分解を実行"
+        confirmLabel="退避して分解を実行"
       />
     </div>
   );

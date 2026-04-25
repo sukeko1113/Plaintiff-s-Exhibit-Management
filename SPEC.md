@@ -1,44 +1,43 @@
-# 甲号証管理アプリ — Claude Code 開発仕様書
+# 甲号証管理アプリ — Claude Code 開発仕様書 v02
 
-> 本ファイルはユーザーから提供された開発仕様書のコピーです。実装は本仕様書に従います。
+> 本ファイルはユーザー提供の v02 仕様書のコピーです。実装は本仕様書に従います。
 
 ## 0. このドキュメントの使い方
-これは、訴訟用「甲号証（こうごうしょう）」管理アプリを Claude Code で実装してもらうための完全仕様書です。Claude Code はこのドキュメントを `SPEC.md` として保存し、本仕様に従ってプロジェクト一式（バックエンド・フロントエンド・起動スクリプト）を生成します。
+訴訟用「甲号証」管理アプリの完全仕様書です。実装中に不明点があれば必ずユーザーに確認します。特に以下の 3 点は誤実装すると致命的です。
 
-実装中に仕様の不明点があれば、推測ではなく **必ずユーザーに質問** してください。特に「表記ゆれの正規化ルール」と「甲号証の単位の判定ロジック」は誤実装すると致命的なので、迷ったら確認してください。
+- 表記ゆれの正規化ルール（§5）
+- 甲号証の単位の判定ロジック（§6）
+- 甲号証リスト.docx の記載形式（§4.4）
 
-## 確定した仕様判断（実装前の確認結果）
-- 証拠説明書テーブル：本文から「標目／作成年月日／作成者」も完全自動抽出を試みる（不明欄は空欄）
-- 甲号証リスト：1 行 1 号証ラベルの単純テキスト形式
-- 結合甲号証フォルダに複数ファイルがあるとき：UI のドロップダウンで対象を選択
-- 上書きポリシー：`<元ファイル名>.bak.docx` のバックアップを作成してから確認なしで上書き
-- OS：Windows 10/11 のみを対象
+### v01 → v02 の主な変更点
+1. **【最重要】** 分解ロジックを「ページ先頭」判定から「**【...】**（全角隅付き括弧）マーカー」判定に変更。フォールバックとして括弧なしの単独行マッチも許容。
+2. 甲号証リスト.docx のフォーマット明確化（1 行 1 ラベル + 説明コメント）。
+3. 結合甲号証ファイル名の自動生成規則を明記。
+4. UI モックがない場合のフォールバック手順を追加。
+5. dry-run（試行モード）を全破壊的操作に追加。
+6. バックアップファイルの命名規則・世代管理ルールを追加（`_backup/YYYYMMDD-HHMMSS/`、10 世代保持）。
+
+### 確定した仕様判断（実装時の確認済み）
+- 証拠説明書テーブル: 個別マスタの本文から「標目／作成年月日／作成者」を完全自動抽出（不明欄は空欄）
+- 甲号証リスト: 1 行 1 ラベルの単純テキスト形式（先頭にコメント行）
+- 結合甲号証フォルダに複数ファイルがあるとき: UI のドロップダウンで対象を選択
+- 上書きポリシー: `_backup/YYYYMMDD-HHMMSS/` へ自動退避してから上書き（確認モーダルなし）
+- マーカー形式の優先度: 【】が見つかれば括弧なしマーカーは無視（§6.3）
+- バックアップ世代数: 最新 10 世代を保持
+- OS: Windows 10/11 のみを対象
 
 ## 1. プロジェクト概要
-### 1.1 目的
-弁護士・法律事務員が、訴訟で提出する **甲号証（原告側証拠書類）** を Word ファイル単位で管理し、結合・分解・一覧表作成を半自動化するためのローカル Web アプリ。
-
-### 1.2 利用シーン
-- 各甲号証は 1 ファイル = 1 Word（.docx）として「個別マスタ」に保管される
-- 申立書（案件ファイル）に列挙された号証を、番号順に結合して 1 つの「結合甲号証.docx」を作る
-- 結合甲号証の先頭に「証拠説明書（一覧テーブル）」を自動生成する
-- 既存の結合甲号証を逆方向に分解して、個別マスタを再構築する
-
-### 1.3 動作環境
-- OS: Windows 10/11
-- 形態: ローカル Web アプリ（バックエンド = Python FastAPI、フロントエンド = React、ブラウザで操作）
+- 目的: 甲号証 Word ファイルの結合・分解・一覧表作成を半自動化
+- 形態: ローカル Web アプリ（バックエンド = Python FastAPI、フロントエンド = React）
 - データ場所: ローカル PC 上の Google Drive 同期フォルダ
 
 ## 2. 技術スタック
-| レイヤ | 技術 | 用途 |
-| --- | --- | --- |
-| バックエンド | Python 3.10+ / FastAPI / Uvicorn | REST API サーバー |
-| Word 操作 | python-docx | 読み取り・パラグラフ単位の操作 |
-| Word 結合 | docxcompose | 書式を保ったままの .docx 結合 |
-| ファイル操作 | pathlib / shutil / os.startfile | パス処理・Word 起動 |
-| フロントエンド | React 18 + Vite + Tailwind CSS | UI |
-| アイコン | lucide-react | UI |
-| HTTP クライアント | fetch | フロント↔バック通信 |
+| レイヤ | 技術 |
+| --- | --- |
+| バックエンド | Python 3.10+ / FastAPI / Uvicorn |
+| Word 操作 | python-docx |
+| Word 結合 | docxcompose |
+| フロントエンド | React 18 + Vite + Tailwind CSS |
 
 ## 3. プロジェクト構造
 ```
@@ -49,122 +48,100 @@ Plaintiff-s-Exhibit-Management/
 ├── backend/
 │   ├── requirements.txt
 │   ├── main.py
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── routes.py
-│   │   └── schemas.py
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── normalizer.py
-│   │   ├── splitter.py
-│   │   ├── combiner.py
-│   │   ├── list_builder.py
-│   │   ├── table_builder.py
-│   │   ├── case_parser.py
-│   │   └── folder_setup.py
-│   └── tests/
-│       ├── test_normalizer.py
-│       ├── test_splitter.py
-│       └── fixtures/
-└── frontend/
-    ├── package.json
-    ├── vite.config.js
-    ├── tailwind.config.js
-    ├── postcss.config.js
-    ├── index.html
-    └── src/
-        ├── main.jsx
-        ├── App.jsx
-        ├── api.js
-        └── index.css
+│   ├── api/{routes,schemas}.py
+│   ├── core/{normalizer,splitter,combiner,list_builder,table_builder,
+│   │       case_parser,folder_setup,backup}.py
+│   └── tests/{test_normalizer,test_splitter,generate_fixtures}.py
+└── frontend/{index.html,package.json,vite.config.js,
+            tailwind.config.js,postcss.config.js,src/{App.jsx,api.js,main.jsx,index.css}}
 ```
 
 ## 4. データ構造とフォルダ規約
-### 4.1 ルートフォルダ配下の構成（必須）
-| 名前 | 種類 | 説明 |
-| --- | --- | --- |
-| `甲号証リスト.docx` | ファイル | 申立書で使用される甲号証番号を縦に列挙した Word ファイル |
-| `個別マスタ` | フォルダ | 各甲号証を 1 ファイル 1 号証で保管 |
-| `結合甲号証` | フォルダ | 結合済み甲号証ファイルの保存先 |
+### 4.1 ルート直下に必要なもの
+- `甲号証リスト.docx`
+- `個別マスタ/`
+- `結合甲号証/`
+- `_backup/`（v02 追加）
 
 ### 4.2 個別マスタのファイル名規約
-全角数字 3 桁に強制統一：
-- `甲第００１号証.docx`
-- `甲第０１２号証.docx`
-- `甲第０１２号証その１.docx`（枝番あり）
+全角 3 桁: `甲第００１号証.docx` / `甲第０１２号証その１.docx`
 
-### 4.3 案件ファイル
-ユーザーが指定する Word ファイル。「甲第〇〇号証」という記述（本文中・表中問わず）が含まれており、そこから使用する号証を抽出する。
+### 4.4 甲号証リスト.docx のフォーマット
+1 行 1 ラベル。先頭にコメント行（自動生成時）。空行・コメント行は無視。
 
-## 5. 表記ゆれ正規化（最重要・厳守）
-詳細はオリジナル仕様書に従う。要点：
+### 4.5 結合甲号証のファイル名規約
+- 自動生成（リスト→結合）: `<ルート名>_甲号証_結合_YYYYMMDD-HHMMSS.docx`
+- 自動生成（案件→結合）: `<ルート名>_甲号証_完成_YYYYMMDD-HHMMSS.docx`
+- ユーザー指定があればそれを優先。`.docx` が無ければ自動補完。
 
+### 4.6 バックアップ規則
+破壊的操作（個別マスタクリア・リスト上書き・結合甲号証同名上書き）の前に `_backup/YYYYMMDD-HHMMSS/` 配下へコピー。最新 10 世代のみ保持し、古いものから自動削除。
+
+## 5. 表記ゆれ正規化（最重要）
 - `甲(第)? <数字 1-3 桁> 号証` を寛容に認識
 - 全角・半角混在、空白あり、`第` 省略を許容
+- **隅付き括弧 `【...】` も許容**（剥がして同じラベルへ）
 - 出力は `甲第<全角3桁>号証` 形式
-- 枝番は `その|の|枝 + 数字` を認識し `その<全角>` で出力
+- 枝番は `その|の|枝 + 数字` を認識し `その<全角>` へ統一
 - 本体番号 1〜999 のみ受理
 - 文中抽出版 (`normalize_koshou`) と段落全体マッチ版 (`normalize_koshou_strict`) の 2 種類
 
-## 6. 「甲号証の単位」の判定ロジック
-- ドキュメント先頭、`pageBreakBefore`、ラン内 `<w:br w:type="page"/>`、`sectPr` を「ページ先頭相当」とみなす
-- その直後の最初の非空段落が `KOSHOU_STRICT_PATTERN` にマッチしたら甲号証の開始
-- 詳細はオリジナル仕様書（疑似コード）参照
+## 6. 「甲号証の単位」の判定ロジック（v02 で大幅修正）
+### 6.1 仕様
+> 一つの甲号証は、`【甲第xxx号証】` と表示されているところから、次の `【甲第yyy号証】` の前まで。
 
-## 7. 機能仕様（API 単位）
-バックエンドは `http://127.0.0.1:8765` でホスト。CORS は `http://localhost:5173` を許可。
+### 6.3 マーカー判定ルール
+1. **【優先】**`MARKER_BRACKETED_PATTERN`（`【甲第xxx号証】` 形式）にマッチする段落全体
+2. **【フォールバック】**`MARKER_BARE_STRICT_PATTERN`（括弧なし単独行）かつ直前段落が空 or 改ページ持ち（または自身が改ページを持つ）
 
-主要エンドポイント:
-- `POST /api/setup` — ルートフォルダ初期化
-- `POST /api/split` — 結合 → 個別 分解
-- `POST /api/combine` — 個別 → 結合
-- `POST /api/list/open` / `auto-create` / `parse`
-- `POST /api/case/parse` / `build-combined`
-- `POST /api/master/list` / `clear`
+【】 が 1 件でも見つかった場合はフォールバックを使わない（§6.3 混在禁止）。
+
+## 7. 機能仕様（API）
+- `POST /api/setup` — ルートフォルダ初期化、サマリ返却
+- `POST /api/master/list` — 個別マスタ一覧（重複検出含む）
+- `POST /api/master/clear` — 個別マスタを空にする（dry_run 対応）
+- `POST /api/combined/list` — 結合甲号証ファイルの詳細一覧
+- `POST /api/split` — 結合 → 個別 分解（dry_run 対応）
+- `POST /api/list/open` — Word でリストを開く
+- `POST /api/list/auto-create` — リストの自動作成（master / combined）（dry_run 対応）
+- `POST /api/list/parse` — リスト解析（無視行も返却）
+- `POST /api/combine` — 個別 → 結合（dry_run 対応、自動ファイル名）
+- `POST /api/case/parse` — 案件ファイルから号証抽出（ヘッダ・フッタも走査）
+- `POST /api/case/build-combined` — 案件ベース結合 + 証拠説明書テーブル
+- `POST /api/backup/open` — `_backup` フォルダを Explorer で開く
+
+すべての破壊的 API は `dry_run`（boolean、既定 false）をサポート。
 
 ## 8. UI 仕様
-- React + Tailwind の SPA
-- ルートフォルダ設定、ログ表示、各種操作ボタン、案件ファイル指定、証拠説明書テーブル編集
-- ログには時刻 + アイコン（⏳/✅/❌）
+- React + Tailwind の SPA、6 セクション構成
+- ヘッダーに「_backup を開く」ボタン
+- 各破壊的操作の隣に「dry-run」チェックボックス
+- リスト解析結果に「無視された行」を黄色注意で表示
+- ログには時刻 + アイコン（⏳/✅/❌/🟡）
 
-## 9. 起動スクリプト (`start.bat`)
-バックエンド venv 作成 → `pip install -r requirements.txt` → `uvicorn` 起動。
-フロントエンド `npm install` → `npm run dev`。
-5 秒後に `http://localhost:5173` を開く。
+## 9. 起動スクリプト
+`start.bat` でバックエンド venv 構築 → `python -m uvicorn backend.main:app` 起動 → フロント `npm install && npm run dev` → 5 秒後にブラウザ起動。
 
 ## 10. エラーハンドリング・エッジケース
 - 日本語パス・全角括弧
-- Google Drive 同期中のファイルロック (`PermissionError`)
-- テーブル内の号証ラベル
+- Google Drive 同期中のロック (`PermissionError`)
+- テーブル内・ヘッダ・フッタの号証ラベル
 - 画像のみの甲号証
 - 同じ正規化結果になる別名ファイル（警告）
-- 4 桁・0 番の号証（警告／エラー）
+- マーカー 0 件のときは明示的にエラー
+- バックアップ容量不足時は処理を中断
 
 ## 11. テスト要件
-- pytest による normalizer/splitter/combiner のテスト
-- fixture 生成スクリプト `tests/generate_fixtures.py`
-
-## 12. 実装の進め方
-1. プロジェクト雛形 + start.bat
-2. normalizer.py（最重要）
-3. folder_setup.py + /api/setup
-4. splitter.py + /api/split
-5. combiner.py + /api/combine
-6. list_builder.py + /api/list/*
-7. case_parser.py + /api/case/parse
-8. table_builder.py + /api/case/build-combined
-9. フロントエンド実装
-10. README とユーザーマニュアル
+- pytest による normalizer / splitter / combiner / list_builder / case_parser のテスト
+- `backend/tests/generate_fixtures.py` で bracketed / bare / case / list / master の 5 種を生成
 
 ## 13. 完成判定基準
-- start.bat ダブルクリックで起動
-- フォルダ自動作成
+- start.bat で起動・ブラウザ自動オープン
+- フォルダ・ファイルが自動作成される（`_backup` 含む）
 - 結合 → 分解 → 再結合 のラウンドトリップで内容が壊れない
 - 正規化テスト全 pass
-- 表記ゆれを含むファイルでも正しくグルーピングされる
-- 案件ファイルから抽出した号証で結合甲号証が作れる
-- 証拠説明書テーブルが先頭に挿入される
-- UI ログ欄にエラー表示
-
-## 14. 不明点（解決済み）
-セクション冒頭の「確定した仕様判断」を参照。
+- 【】マーカー・括弧なし単独行どちらでも分解可能
+- 案件ファイルからの結合甲号証作成
+- 証拠説明書テーブルが先頭に挿入
+- dry-run が破壊的操作で機能
+- バックアップが `_backup/YYYYMMDD-HHMMSS/` に作成

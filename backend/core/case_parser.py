@@ -1,4 +1,4 @@
-"""案件ファイル（申立書 .docx）から使用号証を抽出する（仕様書 §7.7）。"""
+"""案件ファイル（申立書 .docx）から使用号証を抽出する（仕様書 v02 §7.7）。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,10 +19,19 @@ def _iter_text_blocks(doc: Document) -> Iterable[str]:
                 for para in cell.paragraphs:
                     if para.text:
                         yield para.text
+    for section in doc.sections:
+        for header_footer in (section.header, section.footer, section.first_page_header,
+                              section.first_page_footer, section.even_page_header,
+                              section.even_page_footer):
+            try:
+                for para in header_footer.paragraphs:
+                    if para.text:
+                        yield para.text
+            except Exception:
+                continue
 
 
 def extract_labels_from_case_file(case_file_path: str) -> List[str]:
-    """案件ファイルから甲号証ラベルを抽出して、重複排除＋ソートして返す。"""
     path = Path(case_file_path)
     if not path.exists():
         raise FileNotFoundError(f'案件ファイルが見つかりません: {path}')
