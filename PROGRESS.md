@@ -20,14 +20,14 @@
 - [x] Step 8: `table_builder.py` + `tests/test_table_builder.py`（7 件パス）+ `/api/evidence-pack`
 - [x] Step 9: `backup.py` + `tests/test_backup.py`（8 件パス）。split / list 系で組み込み済み
 - [x] Step 9.5: 全 API ルート実装 + `tests/test_api.py`（10 件パス、TestClient による E2E スモーク）
-- [ ] Step 10: フロントエンド（`v01-UI.md` ベース、無ければ §13.5 フォールバック）
-- [ ] Step 11: `start.bat` + README 完成
+- [x] Step 10: フロントエンド（`v01-UI.md` ベース、`api.js` で実 API 接続、Vite ビルド確認済み）
+- [x] Step 11: `start.bat` + README 完成
 
-**現在のテスト総数: 76 件全パス**
+**現在のテスト総数: 76 件全パス。Vite production build 成功。**
 
 ## ブロッカー
 
-- **Step 10 着手前**（必須ではない）: `v01-UI.md` の提供。無ければ §13.5 のフォールバック UI を実装。
+なし（全ステップ完了）。
 
 ## Step 4 補足: マーカー正規表現
 
