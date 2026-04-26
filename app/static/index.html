@@ -2,70 +2,310 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>甲号証 結合</title>
+<title>甲号証管理アプリ</title>
 <style>
-  body { font-family: "Yu Gothic UI", "Meiryo", sans-serif; max-width: 720px; margin: 2em auto; padding: 0 1em; }
-  label { display: block; margin: 0.5em 0; }
-  input[type=text] { width: 100%; padding: 0.4em; font-size: 1em; }
-  button { padding: 0.5em 1.2em; font-size: 1em; cursor: pointer; }
-  pre { background: #f4f4f4; padding: 1em; white-space: pre-wrap; word-break: break-word; }
-  .warn { color: #b35900; }
-  .err { color: #b00020; }
-  .ok { color: #006e2c; }
-  ul { margin: 0.3em 0 0.3em 1.5em; padding: 0; }
+  :root {
+    --primary: #1565c0;
+    --warn: #b35900;
+    --err: #b00020;
+    --ok: #006e2c;
+    --bg: #f5f7fa;
+    --border: #d0d7de;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Yu Gothic UI", "Meiryo", sans-serif; margin: 0; background: var(--bg); }
+  header { background: var(--primary); color: white; padding: 1rem 1.5rem; }
+  header h1 { margin: 0; font-size: 1.3rem; font-weight: 600; }
+  main { max-width: 880px; margin: 1.5rem auto; padding: 0 1rem; }
+
+  .root-bar {
+    background: white; border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.8rem 1rem; margin-bottom: 1rem;
+    display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+  }
+  .root-bar label { font-weight: 600; min-width: 7em; }
+  .root-bar input { flex: 1; min-width: 18em; padding: 0.4rem; font-size: 0.95rem; border: 1px solid var(--border); border-radius: 4px; }
+
+  .tabs { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 1rem; }
+  .tab {
+    padding: 0.6rem 1.2rem; cursor: pointer; border: none; background: transparent;
+    font-size: 1rem; color: #555; border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+  }
+  .tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+  .panel { display: none; background: white; padding: 1.2rem; border-radius: 6px; border: 1px solid var(--border); }
+  .panel.active { display: block; }
+
+  button.action {
+    background: var(--primary); color: white; border: none; padding: 0.55rem 1.4rem;
+    font-size: 0.95rem; border-radius: 4px; cursor: pointer;
+  }
+  button.action:hover { background: #0d47a1; }
+  button.action:disabled { background: #aaa; cursor: not-allowed; }
+  button.secondary {
+    background: white; color: var(--primary); border: 1px solid var(--primary);
+    padding: 0.45rem 1rem; font-size: 0.9rem; border-radius: 4px; cursor: pointer;
+  }
+
+  .result { margin-top: 1rem; }
+  .result h3 { margin: 0.5rem 0 0.3rem; font-size: 1rem; }
+  .result ul { margin: 0.2rem 0 0.6rem 1.5rem; padding: 0; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .warn { color: var(--warn); }
+  .err { color: var(--err); }
+  .muted { color: #666; font-size: 0.88rem; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+  th { background: #fafbfc; font-weight: 600; }
+  td.num { text-align: right; }
+
+  .desc { font-size: 0.92rem; color: #555; margin-bottom: 0.8rem; line-height: 1.6; }
+  .desc code { background: #eef; padding: 0.1em 0.35em; border-radius: 3px; }
+
+  .checkbox { display: inline-flex; align-items: center; gap: 0.3em; margin-left: 0.6em; }
 </style>
 </head>
 <body>
-<h1>甲号証 結合</h1>
-<p>ルートフォルダ直下の <code>甲号証リスト.docx</code> に番号を書いておくと、その番号だけ結合します。
-リストが空なら <code>個別マスタ</code> 内の全ファイルを結合します。</p>
+<header>
+  <h1>甲号証管理アプリ</h1>
+</header>
 
-<label>ルートフォルダ（絶対パス）
-  <input id="root" type="text" placeholder="例: G:\マイドライブ\訴訟データ\令和X年(ワ)第YYYY号">
-</label>
+<main>
+  <div class="root-bar">
+    <label for="root">ルートフォルダ</label>
+    <input id="root" type="text" placeholder="例: G:\マイドライブ\訴訟データ\令和X年(ワ)第YYYY号">
+    <button id="save-root" class="secondary">保存</button>
+    <span id="root-status" class="muted"></span>
+  </div>
 
-<button id="run">結合する</button>
+  <nav class="tabs">
+    <button class="tab active" data-tab="merge">結合</button>
+    <button class="tab" data-tab="split">分解</button>
+    <button class="tab" data-tab="master">個別マスタ一覧</button>
+  </nav>
 
-<div id="output"></div>
+  <!-- 結合タブ -->
+  <section id="panel-merge" class="panel active">
+    <p class="desc">
+      ルートフォルダ直下の <code>甲号証リスト.docx</code> に番号を書いておくと、
+      その番号だけ結合します。リストが空 / 不在なら <code>個別マスタ</code> 内の
+      全ファイルを結合します。出力先は <code>結合甲号証/結合甲号証.docx</code>。
+    </p>
+    <button id="btn-merge" class="action">結合する</button>
+    <div id="merge-result" class="result"></div>
+  </section>
+
+  <!-- 分解タブ -->
+  <section id="panel-split" class="panel">
+    <p class="desc">
+      <code>結合甲号証/結合甲号証.docx</code> を【甲第ＮＮＮ号証】マーカーごとに
+      分解し、<code>個別マスタ/</code> に保存します。
+    </p>
+    <button id="btn-split" class="action">分解する</button>
+    <label class="checkbox">
+      <input id="overwrite" type="checkbox" checked> 既存ファイルを上書きする
+    </label>
+    <div id="split-result" class="result"></div>
+  </section>
+
+  <!-- マスタ一覧タブ -->
+  <section id="panel-master" class="panel">
+    <p class="desc">
+      <code>個別マスタ/</code> 配下の docx 一覧を表示します。
+    </p>
+    <button id="btn-master" class="action">読み込み</button>
+    <div id="master-result" class="result"></div>
+  </section>
+</main>
 
 <script>
-const out = document.getElementById('output');
-document.getElementById('run').addEventListener('click', async () => {
-  const root = document.getElementById('root').value.trim();
-  if (!root) { out.innerHTML = '<p class="err">ルートフォルダを入力してください。</p>'; return; }
-  out.innerHTML = '<p>結合中...</p>';
+const $ = (id) => document.getElementById(id);
+
+// ----- タブ切り替え -----
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.tab;
+    document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.panel').forEach(p => {
+      p.classList.toggle('active', p.id === `panel-${target}`);
+    });
+  });
+});
+
+// ----- ルートフォルダ ロード/保存 -----
+async function loadRoot() {
   try {
-    const res = await fetch('/merge', {
+    const r = await fetch('/api/settings');
+    if (r.ok) {
+      const data = await r.json();
+      if (data.root_folder) {
+        $('root').value = data.root_folder;
+        $('root-status').textContent = '前回の値を読み込みました';
+      }
+    }
+  } catch (_) {}
+}
+
+$('save-root').addEventListener('click', async () => {
+  const root = $('root').value.trim();
+  if (!root) { $('root-status').textContent = ''; return; }
+  try {
+    const r = await fetch('/api/settings', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({root_folder: root})
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({detail: res.statusText}));
-      out.innerHTML = `<p class="err">エラー: ${err.detail || res.statusText}</p>`;
+    $('root-status').textContent = r.ok ? '保存しました' : '保存失敗';
+  } catch (e) {
+    $('root-status').textContent = `エラー: ${e}`;
+  }
+});
+
+function getRoot() {
+  const v = $('root').value.trim();
+  if (!v) { alert('ルートフォルダを入力してください。'); return null; }
+  return v;
+}
+
+// ----- 結合 -----
+$('btn-merge').addEventListener('click', async () => {
+  const root = getRoot();
+  if (!root) return;
+  const out = $('merge-result');
+  out.innerHTML = '<p class="muted">結合中...</p>';
+  $('btn-merge').disabled = true;
+  try {
+    const r = await fetch('/api/merge', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({root_folder: root})
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({detail: r.statusText}));
+      out.innerHTML = `<p class="err">エラー: ${e.detail || r.statusText}</p>`;
       return;
     }
-    const data = await res.json();
-    let html = `<p class="ok">完了: ${data.output_path}</p>`;
-    html += `<p>甲号証リストを使用: ${data.list_used ? 'はい' : 'いいえ'}</p>`;
-    html += `<p>結合ファイル (${data.merged_files.length}件):</p><ul>`;
-    for (const f of data.merged_files) html += `<li>${f}</li>`;
+    const d = await r.json();
+    let html = `<p class="ok">完了: ${d.output_path}</p>`;
+    html += `<p class="muted">甲号証リストを使用: ${d.list_used ? 'はい' : 'いいえ'}</p>`;
+    html += `<h3>結合ファイル (${d.merged_files.length}件)</h3><ul>`;
+    for (const f of d.merged_files) html += `<li>${f}</li>`;
     html += '</ul>';
-    if (data.missing_in_master.length) {
-      html += '<p class="warn">リストに記載があるが個別マスタに見つからない:</p><ul>';
-      for (const m of data.missing_in_master) html += `<li class="warn">${m}</li>`;
+    if (d.missing_in_master.length) {
+      html += `<h3 class="warn">リスト記載・マスタ不在 (${d.missing_in_master.length}件)</h3><ul>`;
+      for (const m of d.missing_in_master) html += `<li class="warn">${m}</li>`;
       html += '</ul>';
     }
-    if (data.warnings.length) {
-      html += '<p class="warn">警告:</p><ul>';
-      for (const w of data.warnings) html += `<li class="warn">${w}</li>`;
+    if (d.warnings.length) {
+      html += `<h3 class="warn">警告</h3><ul>`;
+      for (const w of d.warnings) html += `<li class="warn">${w}</li>`;
       html += '</ul>';
     }
     out.innerHTML = html;
   } catch (e) {
     out.innerHTML = `<p class="err">通信エラー: ${e}</p>`;
+  } finally {
+    $('btn-merge').disabled = false;
   }
 });
+
+// ----- 分解 -----
+$('btn-split').addEventListener('click', async () => {
+  const root = getRoot();
+  if (!root) return;
+  const out = $('split-result');
+  out.innerHTML = '<p class="muted">分解中...</p>';
+  $('btn-split').disabled = true;
+  try {
+    const r = await fetch('/api/split', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        root_folder: root,
+        overwrite: $('overwrite').checked,
+      })
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({detail: r.statusText}));
+      out.innerHTML = `<p class="err">エラー: ${e.detail || r.statusText}</p>`;
+      return;
+    }
+    const d = await r.json();
+    let html = `<p class="ok">完了: ${d.output_dir}</p>`;
+    html += `<h3>新規 (${d.created_files.length}件)</h3>`;
+    if (d.created_files.length) {
+      html += '<ul>';
+      for (const f of d.created_files) html += `<li>${f}</li>`;
+      html += '</ul>';
+    } else { html += '<p class="muted">なし</p>'; }
+    html += `<h3>上書き (${d.overwritten_files.length}件)</h3>`;
+    if (d.overwritten_files.length) {
+      html += '<ul>';
+      for (const f of d.overwritten_files) html += `<li>${f}</li>`;
+      html += '</ul>';
+    } else { html += '<p class="muted">なし</p>'; }
+    if (d.warnings.length) {
+      html += `<h3 class="warn">警告</h3><ul>`;
+      for (const w of d.warnings) html += `<li class="warn">${w}</li>`;
+      html += '</ul>';
+    }
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = `<p class="err">通信エラー: ${e}</p>`;
+  } finally {
+    $('btn-split').disabled = false;
+  }
+});
+
+// ----- マスタ一覧 -----
+function fmtSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+$('btn-master').addEventListener('click', async () => {
+  const root = getRoot();
+  if (!root) return;
+  const out = $('master-result');
+  out.innerHTML = '<p class="muted">読込中...</p>';
+  $('btn-master').disabled = true;
+  try {
+    const url = `/api/master?root_folder=${encodeURIComponent(root)}`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({detail: r.statusText}));
+      out.innerHTML = `<p class="err">エラー: ${e.detail || r.statusText}</p>`;
+      return;
+    }
+    const d = await r.json();
+    let html = `<p class="muted">${d.master_dir}</p>`;
+    if (!d.entries.length) {
+      html += '<p>個別マスタにファイルがありません。</p>';
+    } else {
+      html += '<table><thead><tr><th>マーカー</th><th>ファイル名</th><th class="num">サイズ</th></tr></thead><tbody>';
+      for (const e of d.entries) {
+        const marker = e.normalized_marker || '<span class="warn">(番号不明)</span>';
+        html += `<tr><td>${marker}</td><td>${e.filename}</td><td class="num">${fmtSize(e.size_bytes)}</td></tr>`;
+      }
+      html += '</tbody></table>';
+      html += `<p class="muted">${d.entries.length} 件</p>`;
+    }
+    if (d.warnings.length) {
+      html += `<h3 class="warn">警告</h3><ul>`;
+      for (const w of d.warnings) html += `<li class="warn">${w}</li>`;
+      html += '</ul>';
+    }
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = `<p class="err">通信エラー: ${e}</p>`;
+  } finally {
+    $('btn-master').disabled = false;
+  }
+});
+
+loadRoot();
 </script>
 </body>
 </html>
