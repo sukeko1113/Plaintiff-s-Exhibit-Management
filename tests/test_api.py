@@ -26,7 +26,39 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 def test_index_returns_html(client: TestClient) -> None:
     r = client.get("/")
     assert r.status_code == 200
-    assert "甲号証管理アプリ" in r.text
+    assert "甲号証管理システム" in r.text
+
+
+def test_setup_creates_folders_and_saves_settings(client: TestClient, tmp_path: Path) -> None:
+    target = tmp_path / "case_setup"
+    assert not target.exists()
+
+    r = client.post("/api/setup", json={"root_folder": str(target)})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["root_folder"] == str(target)
+    # フォルダ作成のメッセージが含まれる
+    assert any("個別マスタ" in m for m in d["messages"])
+    assert any("結合甲号証" in m for m in d["messages"])
+    assert any("甲号証リスト" in m for m in d["messages"])
+
+    # 実フォルダが作成されている
+    assert (target / "個別マスタ").is_dir()
+    assert (target / "結合甲号証").is_dir()
+    assert (target / "甲号証リスト.docx").is_file()
+
+    # 設定にも保存されている
+    r2 = client.get("/api/settings")
+    assert r2.json()["root_folder"] == str(target)
+
+
+def test_setup_second_call_reports_existing(client: TestClient, tmp_path: Path) -> None:
+    target = tmp_path / "case_setup2"
+    client.post("/api/setup", json={"root_folder": str(target)})
+    r = client.post("/api/setup", json={"root_folder": str(target)})
+    assert r.status_code == 200
+    d = r.json()
+    assert any("確認しました" in m for m in d["messages"])
 
 
 def test_settings_round_trip(client: TestClient, tmp_path: Path) -> None:

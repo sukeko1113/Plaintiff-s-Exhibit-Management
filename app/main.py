@@ -3,9 +3,11 @@
 甲号証管理アプリ FastAPI エントリポイント。
 
 提供エンドポイント:
-- GET  /                : UI (タブ式: 結合 / 分解 / マスタ一覧)
+- GET  /                : UI (シングルページ)
 - GET  /api/settings    : 保存済みルートフォルダ
 - POST /api/settings    : ルートフォルダを保存
+- POST /api/setup       : ルートを保存 + フォルダ構成を確認/生成
+- POST /api/open-list   : 甲号証リスト.docx を OS の既定アプリで開く
 - POST /api/merge       : 結合
 - POST /api/split       : 分解
 - GET  /api/master      : 個別マスタ一覧
@@ -14,6 +16,9 @@
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -23,14 +28,20 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.master_service import list_master
-from app.merge_service import merge_kogo
+from app.merge_service import (
+    LIST_FILENAME,
+    MASTER_DIRNAME,
+    OUTPUT_DIRNAME,
+    ensure_folders,
+    merge_kogo,
+)
 from app.settings import AppSettings, load_settings, save_settings
 from app.split_service import split_kogo
 
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-app = FastAPI(title="甲号証管理アプリ")
+app = FastAPI(title="甲号証管理システム")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
@@ -47,6 +58,15 @@ class RootFolderRequest(BaseModel):
 
 class SettingsModel(BaseModel):
     root_folder: Optional[str] = None
+
+
+class SetupResult(BaseModel):
+    root_folder: str
+    messages: List[str]
+
+
+class OpenListResult(BaseModel):
+    opened_path: str
 
 
 class MergeResult(BaseModel):
@@ -88,7 +108,8 @@ class MasterListingModel(BaseModel):
 # 共通ヘルパ
 # ---------------------------------------------------------------------------
 
-def _validate_root(root_folder: str) -> Path:
+def _require_existing_root(root_folder: str) -> Path:
+    """既存ルートを必須とする (merge/split/master 用)。"""
     root = Path(root_folder)
     if not root.exists():
         raise HTTPException(status_code=400, detail=f"ルートフォルダが存在しません: {root}")
@@ -105,7 +126,7 @@ def _validate_root(root_folder: str) -> Path:
 def index() -> HTMLResponse:
     index_path = STATIC_DIR / "index.html"
     if not index_path.exists():
-        return HTMLResponse("<h1>甲号証管理アプリ</h1>")
+        return HTMLResponse("<h1>甲号証管理システム</h1>")
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
 
 
@@ -126,12 +147,68 @@ def post_settings(req: SettingsModel) -> SettingsModel:
 
 
 # ---------------------------------------------------------------------------
+# フォルダ構成確認 (ルートを保存 + 必要なフォルダ・リストを生成)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/setup", response_model=SetupResult)
+def setup_endpoint(req: RootFolderRequest) -> SetupResult:
+    root = Path(req.root_folder).expanduser()
+
+    list_path = root / LIST_FILENAME
+    master_dir = root / MASTER_DIRNAME
+    output_dir = root / OUTPUT_DIRNAME
+
+    list_existed = list_path.exists()
+    master_existed = master_dir.exists()
+    output_existed = output_dir.exists()
+
+    try:
+        ensure_folders(root)
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"フォルダの作成に失敗しました: {e}")
+
+    save_settings(AppSettings(root_folder=str(root)))
+
+    messages: List[str] = [
+        f"ルートフォルダを設定しました: {root}",
+        "「甲号証リスト.docx」を" + ("確認しました。" if list_existed else "新規作成しました。"),
+        "「個別マスタ」フォルダを" + ("確認しました。" if master_existed else "新規作成しました。"),
+        "「結合甲号証」フォルダを" + ("確認しました。" if output_existed else "新規作成しました。"),
+    ]
+
+    return SetupResult(root_folder=str(root), messages=messages)
+
+
+# ---------------------------------------------------------------------------
+# 甲号証リストを Word で開く
+# ---------------------------------------------------------------------------
+
+@app.post("/api/open-list", response_model=OpenListResult)
+def open_list_endpoint(req: RootFolderRequest) -> OpenListResult:
+    root = _require_existing_root(req.root_folder)
+    ensure_folders(root)
+    list_path = root / LIST_FILENAME
+
+    try:
+        if os.name == "nt":
+            os.startfile(str(list_path))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(list_path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(list_path)], check=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ファイルを開けませんでした: {e}")
+
+    return OpenListResult(opened_path=str(list_path))
+
+
+# ---------------------------------------------------------------------------
 # 結合
 # ---------------------------------------------------------------------------
 
 @app.post("/api/merge", response_model=MergeResult)
 def merge_endpoint(req: RootFolderRequest) -> MergeResult:
-    root = _validate_root(req.root_folder)
+    root = _require_existing_root(req.root_folder)
     outcome = merge_kogo(root)
     return MergeResult(
         output_path=str(outcome.output_path),
@@ -148,7 +225,7 @@ def merge_endpoint(req: RootFolderRequest) -> MergeResult:
 
 @app.post("/api/split", response_model=SplitResult)
 def split_endpoint(req: SplitRequest) -> SplitResult:
-    root = _validate_root(req.root_folder)
+    root = _require_existing_root(req.root_folder)
     input_path = Path(req.input_path) if req.input_path else None
     try:
         outcome = split_kogo(root, input_path=input_path, overwrite=req.overwrite)
@@ -170,7 +247,7 @@ def split_endpoint(req: SplitRequest) -> SplitResult:
 
 @app.get("/api/master", response_model=MasterListingModel)
 def master_endpoint(root_folder: str) -> MasterListingModel:
-    root = _validate_root(root_folder)
+    root = _require_existing_root(root_folder)
     listing = list_master(root)
     return MasterListingModel(
         master_dir=str(listing.master_dir),
