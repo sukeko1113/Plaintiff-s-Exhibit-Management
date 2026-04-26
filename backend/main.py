@@ -1,6 +1,6 @@
 """FastAPI エントリポイント。
 
-起動: cd backend && python -m uvicorn main:app --port 8765 --reload
+起動: python -m uvicorn backend.main:app --port 8765 --reload  (プロジェクトルートで実行)
 """
 
 from __future__ import annotations

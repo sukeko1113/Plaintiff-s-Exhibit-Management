@@ -9,7 +9,7 @@ echo ===================================================
 
 cd /d "%~dp0"
 
-start "Koshou Backend" cmd /k "cd backend && python -m uvicorn main:app --port 8765 --reload"
+start "Koshou Backend" cmd /k "python -m uvicorn backend.main:app --port 8765 --reload"
 start "Koshou Frontend" cmd /k "cd frontend && npm run dev"
 
 timeout /t 3 > nul
