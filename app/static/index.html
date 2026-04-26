@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>甲号証 結合</title>
+<style>
+  body { font-family: "Yu Gothic UI", "Meiryo", sans-serif; max-width: 720px; margin: 2em auto; padding: 0 1em; }
+  label { display: block; margin: 0.5em 0; }
+  input[type=text] { width: 100%; padding: 0.4em; font-size: 1em; }
+  button { padding: 0.5em 1.2em; font-size: 1em; cursor: pointer; }
+  pre { background: #f4f4f4; padding: 1em; white-space: pre-wrap; word-break: break-word; }
+  .warn { color: #b35900; }
+  .err { color: #b00020; }
+  .ok { color: #006e2c; }
+  ul { margin: 0.3em 0 0.3em 1.5em; padding: 0; }
+</style>
+</head>
+<body>
+<h1>甲号証 結合</h1>
+<p>ルートフォルダ直下の <code>甲号証リスト.docx</code> に番号を書いておくと、その番号だけ結合します。
+リストが空なら <code>個別マスタ</code> 内の全ファイルを結合します。</p>
+
+<label>ルートフォルダ（絶対パス）
+  <input id="root" type="text" placeholder="例: G:\マイドライブ\訴訟データ\令和X年(ワ)第YYYY号">
+</label>
+
+<button id="run">結合する</button>
+
+<div id="output"></div>
+
+<script>
+const out = document.getElementById('output');
+document.getElementById('run').addEventListener('click', async () => {
+  const root = document.getElementById('root').value.trim();
+  if (!root) { out.innerHTML = '<p class="err">ルートフォルダを入力してください。</p>'; return; }
+  out.innerHTML = '<p>結合中...</p>';
+  try {
+    const res = await fetch('/merge', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({root_folder: root})
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({detail: res.statusText}));
+      out.innerHTML = `<p class="err">エラー: ${err.detail || res.statusText}</p>`;
+      return;
+    }
+    const data = await res.json();
+    let html = `<p class="ok">完了: ${data.output_path}</p>`;
+    html += `<p>甲号証リストを使用: ${data.list_used ? 'はい' : 'いいえ'}</p>`;
+    html += `<p>結合ファイル (${data.merged_files.length}件):</p><ul>`;
+    for (const f of data.merged_files) html += `<li>${f}</li>`;
+    html += '</ul>';
+    if (data.missing_in_master.length) {
+      html += '<p class="warn">リストに記載があるが個別マスタに見つからない:</p><ul>';
+      for (const m of data.missing_in_master) html += `<li class="warn">${m}</li>`;
+      html += '</ul>';
+    }
+    if (data.warnings.length) {
+      html += '<p class="warn">警告:</p><ul>';
+      for (const w of data.warnings) html += `<li class="warn">${w}</li>`;
+      html += '</ul>';
+    }
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = `<p class="err">通信エラー: ${e}</p>`;
+  }
+});
+</script>
+</body>
+</html>
