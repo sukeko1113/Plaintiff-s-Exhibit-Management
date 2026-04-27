@@ -1,0 +1,7 @@
+# Default: let Git auto-detect text files and use system line endings on checkout
+* text=auto
+
+# Windows batch / cmd files MUST use CRLF, otherwise cmd.exe may silently fail
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
