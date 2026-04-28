@@ -14,6 +14,7 @@
 - 結合済みの甲号証ファイルを甲号証番号(甲第○号証/甲○)単位で**分解**して個別ファイルに分ける
 - 「甲号証リスト.docx」をベースに、結合対象や順序を制御する
 - 個別マスタ一覧を取得して甲号証番号を正規化表示する
+- 個別マスタまたは結合甲号証から甲号証リストを生成する
 
 ### 1.2 想定ユーザー
 弁護士・パラリーガル等、訴訟実務で甲号証ファイルを編集する担当者(個人ローカル端末で運用)。
@@ -47,6 +48,7 @@ Plaintiff-s-Exhibit-Management/
 │   ├── merge_kogo_shoko.py           # 結合の補助処理
 │   ├── split_service.py              # 分解処理
 │   ├── split_evidence_docx.py        # 分解の本体処理
+│   ├── list_service.py               # 甲号証リスト生成処理
 │   └── static/
 │       └── index.html                # フロントエンド UI(1 ファイル)
 ├── backend/                          # 旧構成の名残(現在は実質未使用)
@@ -265,6 +267,38 @@ GET /api/master?root_folder=C:\Users...
   - `branch`: 枝番号(例:甲第1号証の2 → 2)
 - **エラー:** ルートが存在しない → HTTP 400
 
+### 5.9 POST `/api/auto-list`
+- **機能:** 個別マスタまたは結合甲号証から甲号証番号を抽出し、ルート直下の「甲号証リスト.docx」を生成する(番号を縦に並べただけのシンプルなリスト)
+- **リクエスト:** `AutoListRequest`
+```json
+  {
+    "root_folder": "C:\\Users\\...",
+    "source": "master"
+  }
+```
+  - `source`: `"master"`(個別マスタ配下の docx を走査)/ `"combined"`(結合甲号証/結合甲号証.docx の本文マーカーを走査)
+- **動作:**
+  1. ルートフォルダ配下の必要フォルダを保証(`ensure_folders`)
+  2. `source` に応じて番号を抽出(詳細は §6.4)
+  3. 既存の「甲号証リスト.docx」があれば `甲号証リスト.docx.bak` にバックアップしてから上書き
+  4. `(main, branch or 0)` 昇順で並べ、1 行 1 段落で書き出す
+     - 表記は正規化ファイル名形式(例:`甲第００１号証`、枝番付きは `甲第００１号証その２`)
+     - 【】(マーカー形式)は使わない
+- **レスポンス:** `AutoListResult`
+```json
+  {
+    "output_path": "C:\\...\\甲号証リスト.docx",
+    "source": "master",
+    "numbers_written": ["甲第００１号証", "甲第００２号証"],
+    "backup_created": true,
+    "warnings": []
+  }
+```
+- **エラー:**
+  - ルートが存在しない → HTTP 400
+  - `source` が `"master"`/`"combined"` 以外 → HTTP 400
+  - `source="combined"` で結合甲号証.docx が不在 → HTTP 400
+
 ---
 ## 6. 主要機能の処理ロジック
 
@@ -333,21 +367,62 @@ GET /api/master?root_folder=C:\Users...
 
 ---
 
-### 6.4 設定の永続化(`settings.py`)
+### 6.4 リスト生成(`list_service.generate_list`)
 
-#### 6.4.1 保存先
+#### 6.4.1 入出力
+- **入力:** ルートフォルダのパス、`source`(`"master"` または `"combined"`)
+- **入力ファイル:**
+  - `source="master"`: `<root>/個別マスタ/*.docx`
+  - `source="combined"`: `<root>/結合甲号証/結合甲号証.docx`
+- **出力ファイル:** `<root>/甲号証リスト.docx`(ルート直下の 1 ファイル)
+- **既存出力のバックアップ:** 出力先に同名ファイルがある場合、`甲号証リスト.docx.bak` として複製
+  - 理由:このファイルは結合(merge)の入力でもあり、ユーザーが手動で並び順を編集している可能性があるため、不可逆的な上書きを避ける
+  - 判定は「呼び出し時点で既存だったか」で行う(`ensure_folders` が空ファイルを新規作成するケースを除外するため)
+
+#### 6.4.2 処理の流れ
+1. `source` の妥当性チェック(`"master"`/`"combined"` のみ受理、それ以外は `ValueError`)
+2. 出力ファイルの事前存在チェック(バックアップ要否の判定用)
+3. `ensure_folders()` でルート配下を保証
+4. **モード分岐:**
+   - **`source="master"`:**
+     - 個別マスタ配下の docx を `sorted(...glob("*.docx"))` で走査
+     - `~$` で始まる Word の一時ロックファイルは除外
+     - `kogo_normalizer.detect_number` で番号を抽出(本文 → ファイル名の優先順位)
+     - 番号を抽出できないファイルは警告に記録して除外
+     - 同一番号の重複は最初の 1 件のみ採用、警告に記録
+   - **`source="combined"`:**
+     - 結合甲号証.docx が不在なら `FileNotFoundError`
+     - 全段落のテキストを `MARKER_PATTERN` で走査
+     - 重複は除去(最初の出現のみ採用)
+5. `(main, branch or 0)` 昇順で並べ替え
+6. 既存出力があれば `甲号証リスト.docx.bak` にバックアップ
+7. 番号を正規化ファイル名形式(`甲第〇〇〇号証` / `甲第〇〇〇号証その〇`、§7.1.4)で 1 段落 1 件として書き出す
+   - python-docx のみで生成(docxcompose は不要)
+   - 【】(マーカー形式)は使わない
+8. `ListOutcome` を返却
+
+#### 6.4.3 例外
+- `source` が不正 → `ValueError`(API 層で HTTP 400 に変換)
+- `source="combined"` で結合甲号証.docx 不在 → `FileNotFoundError`(API 層で HTTP 400 に変換)
+- ルートフォルダ不在 → API 層で HTTP 400(`_require_existing_root` が判定)
+
+---
+
+### 6.5 設定の永続化(`settings.py`)
+
+#### 6.5.1 保存先
 - **Windows:** `%LOCALAPPDATA%/KogoKanri/settings.json`(`LOCALAPPDATA` 未設定なら `~/KogoKanri/settings.json`)
 - **macOS / Linux:** `~/.kogo_kanri/settings.json`
 - **テスト時:** 環境変数 `KOGO_KANRI_SETTINGS_PATH` で完全上書き可能
 
-#### 6.4.2 形式
+#### 6.5.2 形式
 JSON。現在の項目は `root_folder`(任意)のみ。
 
 ```json
 {"root_folder": "C:\\Users\\...\\..."}
 ```
 
-#### 6.4.3 動作
+#### 6.5.3 動作
 - `load_settings()`: ファイルが無ければ既定値の `AppSettings()` を返す。読み込み失敗時はログに警告を出して既定値を返す(例外は外に出さない)。
 - `save_settings()`: 親フォルダを作成しつつ JSON を書き出す。
 

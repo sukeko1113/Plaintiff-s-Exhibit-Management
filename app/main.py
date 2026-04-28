@@ -11,6 +11,7 @@
 - POST /api/merge       : 結合
 - POST /api/split       : 分解
 - GET  /api/master      : 個別マスタ一覧
+- POST /api/auto-list   : 個別マスタ or 結合甲号証 から甲号証リストを自動生成
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.list_service import VALID_SOURCES, generate_list
 from app.master_service import list_master
 from app.merge_service import (
     LIST_FILENAME,
@@ -87,6 +89,19 @@ class SplitResult(BaseModel):
     output_dir: str
     created_files: List[str]
     overwritten_files: List[str]
+    warnings: List[str]
+
+
+class AutoListRequest(BaseModel):
+    root_folder: str = Field(..., description="ルートフォルダの絶対パス")
+    source: str = Field(..., description='抽出元: "master"=個別マスタ / "combined"=結合甲号証')
+
+
+class AutoListResult(BaseModel):
+    output_path: str
+    source: str
+    numbers_written: List[str]
+    backup_created: bool
     warnings: List[str]
 
 
@@ -253,4 +268,31 @@ def master_endpoint(root_folder: str) -> MasterListingModel:
         master_dir=str(listing.master_dir),
         entries=[MasterEntryModel(**e.__dict__) for e in listing.entries],
         warnings=listing.warnings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 甲号証リストの自動生成
+# ---------------------------------------------------------------------------
+
+@app.post("/api/auto-list", response_model=AutoListResult)
+def auto_list_endpoint(req: AutoListRequest) -> AutoListResult:
+    root = _require_existing_root(req.root_folder)
+    if req.source not in VALID_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"source は {VALID_SOURCES} のいずれかを指定してください: {req.source!r}",
+        )
+    try:
+        outcome = generate_list(root, source=req.source)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return AutoListResult(
+        output_path=str(outcome.output_path),
+        source=outcome.source,
+        numbers_written=outcome.numbers_written,
+        backup_created=outcome.backup_created,
+        warnings=outcome.warnings,
     )
