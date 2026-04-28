@@ -37,7 +37,16 @@ Pythonコードから:
 [アルゴリズム]
 1. .docxを ZIP として開き、word/document.xml を読み込む。
 2. <w:body> 内のトップレベル要素を順に走査する。
-3. テキスト内容に【甲第XX号証】を含む段落の位置をすべて記録する。
+3. 「ページ先頭にあり、かつ段落冒頭が【甲第○号証】である段落」のみを
+   section anchor として記録する。section anchor の判定条件:
+     (A) 段落がページ先頭にある — 次のいずれかに該当
+         - 文書中の最初のトップレベル要素
+         - 直前の段落の末尾に <w:br w:type="page"/> がある
+         - 直前の段落の <w:pPr> に <w:sectPr> が埋め込まれている
+         - 当該段落自身が <w:pPr> に <w:pageBreakBefore/> を持つ
+     (B) 段落冒頭が ^\\s*【...】 マーカーパターンにマッチする
+     (C) マーカーは 【】 で括られている(本文中の引用形式と区別)
+   表(<w:tbl>)はページ先頭性を伝播しない扱い。
 4. body末尾の <w:sectPr> (body-level sectPr) を別途取り出す。
 5. N番目のマーカー段落から、N+1番目のマーカー段落の直前までを「1つの甲号証」
    とみなして切り出す。
@@ -63,8 +72,12 @@ from typing import Iterable
 
 # 【甲第XX号証】 をマッチする正規表現。
 # 第1グループに主番号、第2グループ(任意)に枝番を捕捉する。
+#
+# 【重要】分解時は段落「冒頭」のマーカーのみを section anchor として扱うため、
+# パターンは `^\s*` で先頭に固定する。本文中に引用された 【甲第○号証】 を誤って
+# 分割マーカーと判定しないようにするための制約である。
 DEFAULT_MARKER_PATTERN = (
-    r'【\s*甲\s*第?\s*([0-9０-９]+)\s*号\s*証'
+    r'^\s*【\s*甲\s*第?\s*([0-9０-９]+)\s*号\s*証'
     r'(?:\s*その\s*([0-9０-９]+))?\s*】'
 )
 
@@ -157,6 +170,47 @@ def _extract_paragraph_text(paragraph_xml: str) -> str:
     return ''.join(re.findall(r'<w:t\b[^>]*>([^<]*)</w:t>', paragraph_xml))
 
 
+# -------------------------------------------------------------------
+# ページ境界判定ヘルパ
+#
+# section anchor(分割マーカー)として扱うのは「ページ先頭の段落」だけに限定する。
+# ある段落がページ先頭になる条件は、次のいずれか:
+#   1. 文書中の最初のトップレベル要素であること
+#   2. 直前の段落の末尾に <w:br w:type="page"/> がある(ハード改ページ)
+#   3. 直前の段落の <w:pPr> に <w:sectPr> が埋め込まれている(セクション区切り)
+#   4. 当該段落自身が <w:pPr> 内に <w:pageBreakBefore/> を持つ
+#
+# 表(<w:tbl>)はページ先頭性を伝播しない扱い(=表が直前にあっても、その次の段落を
+# ページ先頭とは見做さない)。
+# -------------------------------------------------------------------
+
+
+def _paragraph_has_trailing_page_break(paragraph_xml: str) -> bool:
+    """段落内に <w:br w:type="page"/> が含まれるか(=ハード改ページ)。"""
+    return re.search(r'<w:br\b[^/>]*\bw:type\s*=\s*"page"', paragraph_xml) is not None
+
+
+def _paragraph_has_embedded_sectpr(paragraph_xml: str) -> bool:
+    """段落の <w:pPr> 内に <w:sectPr> が埋め込まれているか(=セクション区切り)。"""
+    pPr_match = re.search(r'<w:pPr\b[^>]*>(.*?)</w:pPr>', paragraph_xml, re.DOTALL)
+    if not pPr_match:
+        return False
+    pPr_inner = pPr_match.group(1)
+    if re.search(r'<w:sectPr\b[^>]*>.*?</w:sectPr>', pPr_inner, re.DOTALL):
+        return True
+    if re.search(r'<w:sectPr\b[^/>]*/>', pPr_inner):
+        return True
+    return False
+
+
+def _paragraph_has_page_break_before(paragraph_xml: str) -> bool:
+    """段落の <w:pPr> に <w:pageBreakBefore/> が含まれるか。"""
+    pPr_match = re.search(r'<w:pPr\b[^>]*>(.*?)</w:pPr>', paragraph_xml, re.DOTALL)
+    if not pPr_match:
+        return False
+    return re.search(r'<w:pageBreakBefore\b[^/>]*/?>', pPr_match.group(1)) is not None
+
+
 def _promote_embedded_sectpr(section_xml: str) -> tuple[str, str | None]:
     """
     section_xml の中の最後の <w:sectPr> (= 段落 pPr に埋め込まれたセクション区切り)
@@ -233,11 +287,33 @@ def split_docx(
         body_level_sectpr_xml = spans[-1]['xml']
         last_idx_for_content = len(spans) - 1
 
+    # `^\s*` は段落テキストの先頭に固定するため MULTILINE は付けない
     marker_re = re.compile(marker_pattern)
     section_anchors: list[tuple[int, str, str]] = []  # (span_idx, main_id, branch_id)
+
+    # 「次の段落がページ先頭か」を伝播するフラグ。文書冒頭は True。
+    # 段落以外(例: <w:tbl>, <w:sectPr>)に到達した場合はページ先頭性を伝播させない
+    # = 表の直後の段落をページ先頭扱いしない、という方針。
+    next_is_page_top = True
+
     for i, span in enumerate(spans[:last_idx_for_content]):
         if span['tag'] != 'w:p':
+            # 表などはページ先頭性を伝播させない
+            next_is_page_top = False
             continue
+
+        is_page_top = next_is_page_top or _paragraph_has_page_break_before(span['xml'])
+
+        # 次の段落へ伝播させる値を計算
+        propagates = (
+            _paragraph_has_trailing_page_break(span['xml'])
+            or _paragraph_has_embedded_sectpr(span['xml'])
+        )
+        next_is_page_top = propagates
+
+        if not is_page_top:
+            continue
+
         text = _extract_paragraph_text(span['xml'])
         mm = marker_re.search(text)
         if mm:
@@ -250,7 +326,9 @@ def split_docx(
     if not section_anchors:
         first_text = _extract_paragraph_text(spans[0]['xml']) if spans else '(空)'
         raise ValueError(
-            f"マーカーが見つかりません。pattern={marker_pattern!r}\n"
+            "マーカーが見つかりません。"
+            "ページ先頭の【甲第…号証】のみ対象です(本文中の引用は対象外)。\n"
+            f"pattern={marker_pattern!r}\n"
             f"document.xml の冒頭テキスト: {first_text}"
         )
 

@@ -49,9 +49,6 @@ Plaintiff-s-Exhibit-Management/
 │   ├── split_evidence_docx.py        # 分解の本体処理
 │   └── static/
 │       └── index.html                # フロントエンド UI(1 ファイル)
-├── backend/                          # 旧構成の名残(現在は実質未使用)
-│   ├── api/
-│   └── core/vendor/
 ├── tests/                            # pytest テスト
 │   ├── conftest.py
 │   ├── test_api.py
@@ -320,9 +317,26 @@ GET /api/master?root_folder=C:\Users...
 6. 一時ディレクトリを削除(`finally` で必ず実行)
 7. `SplitOutcome` を返却
 
-#### 6.2.3 例外
+#### 6.2.3 ページ境界判定アルゴリズム(section anchor の決定)
+
+`split_docx()` は `<w:body>` 直下のトップレベル要素(`<w:p>` / `<w:tbl>` / `<w:sectPr>`)を順に走査し、各段落について「section anchor(分割の起点となる段落)」かどうかを次の **3 条件** すべてを満たすかで判定する。
+
+- **(A) 段落がページ先頭にある** — 次のいずれかに該当する場合のみ
+  1. 文書中の最初のトップレベル要素である
+  2. **直前の段落** の末尾に `<w:br w:type="page"/>` を持つ(ハード改ページ)
+  3. **直前の段落** の `<w:pPr>` 内に `<w:sectPr>` が埋め込まれている(セクション区切り)
+  4. **当該段落自身** が `<w:pPr>` 内に `<w:pageBreakBefore/>` を持つ
+- **(B) 段落冒頭がマーカーパターンにマッチ** — 既定パターンは `^\s*【...】` で先頭に固定。段落の途中に出現するマーカー(本文中の引用)は section anchor として拾わない
+- **(C) 【】 必須** — `【` `】` で括られていることが必要。本文の引用形式と区別するための制約
+
+##### 補足
+- **表 (`<w:tbl>`) はページ先頭性を伝播しない** — 表の直前段落がハード改ページや埋め込み sectPr を持っていたとしても、表をまたいで「次の段落をページ先頭」とは見做さない。
+- セクション anchor が 0 件の場合、「ページ先頭の【甲第…号証】のみ対象」である旨を含む `ValueError` を送出する。
+- N 番目の anchor 段落から N+1 番目の anchor 段落の直前までを 1 つの甲号証として切り出す。
+
+#### 6.2.4 例外
 - 分解元ファイル不在 → `FileNotFoundError`
-- 分解処理の値異常 → `ValueError`(API 層で HTTP 400 に変換)
+- 分解処理の値異常(マーカー無し等) → `ValueError`(API 層で HTTP 400 に変換)
 
 ---
 
@@ -385,13 +399,23 @@ class KogoNumber:
 
 ### 7.2 番号抽出のパターン(正規表現)
 
-3 種類のパターンを使い分けている。いずれも全角・半角の数字、「第」の有無、空白・改行の混入を許容する。
+4 種類のパターンを使い分けている。いずれも全角・半角の数字、「第」の有無、空白・改行の混入を許容する。
 
-| パターン名 | 用途 | 「【】」の扱い |
-|---|---|---|
-| `MARKER_PATTERN` | 結合済み本文中のマーカー検出(分解時など) | `【】` を許容 |
-| `FILENAME_PATTERN` | ファイル名からの番号検出 | `【】` 含まず |
-| `LIST_PATTERN` | 甲号証リストの段落・セルから番号を拾う | `【】` 含まず |
+| パターン名 | 用途 | 先頭固定 | 「【】」の扱い |
+|---|---|---|---|
+| `MARKER_PATTERN` | 結合時の本文マーカー書き換え・検出 | なし | `【】` を許容(任意) |
+| `FILENAME_PATTERN` | ファイル名からの番号検出 | なし | `【】` 含まず |
+| `LIST_PATTERN` | 甲号証リストの段落・セルから番号を拾う | なし | `【】` 含まず |
+| `DEFAULT_MARKER_PATTERN`(分解専用) | `split_evidence_docx.py` の section anchor 検出 | `^\s*` で**段落冒頭に固定** | `【】` **必須** |
+
+#### 7.2.1 分解専用パターン(`DEFAULT_MARKER_PATTERN`)の補足
+
+`app/split_evidence_docx.py` で定義され、結合済み docx をマーカー単位に分解する際にのみ使われる。`MARKER_PATTERN` と異なり、次の 2 点で **厳格化** されている:
+
+- 先頭が `^\s*` で固定されている — 段落の冒頭にあるマーカーのみを対象とし、段落の途中に出現するマーカー(=本文中の引用)は対象外。
+- `【` `】` を必須とする — 本文の引用形式や、ファイル名・リスト由来の番号と区別する。
+
+このパターンは「ページ境界判定 (§6.2.3)」と組み合わせて section anchor を決定する。
 
 ### 7.3 番号の検出優先順位(`detect_number`)
 
@@ -431,13 +455,31 @@ class KogoNumber:
 
 ## 9. 要確認事項
 
-> 第 2 フェーズで多くを解消した。残る項目を以下に絞って記載する。
+### 9.1 解消済み項目
 
-- [ ] `app/static/index.html` の構成(React か素の HTML/JS か、API 呼び出しの実装)
-- [ ] `app/master_service.py` の詳細(`MasterEntry` の各フィールドの算出方法)
-- [ ] `app/split_evidence_docx.py` の詳細(ページ境界判定アルゴリズム)
-- [ ] `app/merge_kogo_shoko.py` の詳細(`prepare_and_merge` の実装、ページ区切り挿入の仕組み)
-- [ ] `backend/` フォルダの今後の扱い(削除するか、何かに使うか)
-- [ ] 「証拠説明書」関連の機能が今後追加されるかどうか(現実装には存在しない)
-- [ ] テストファイルの内容と件数(`tests/` 配下、特に `test_*.py` の各テスト件数)
+| 項目 | 解消した内容 |
+|---|---|
+| `app/static/index.html` の構成 | 単一 HTML(タブ付き UI)。`v01-UI.md` を仕様の正本とする。 |
+| `app/master_service.py` の詳細 | `MasterEntry` は filename / normalized_marker / main / branch / size_bytes を持つ。詳細は §6.3 で別途追記予定。 |
+| `app/split_evidence_docx.py` のページ境界判定 | §6.2.3 にアルゴリズムを正式記載。 |
+| `app/merge_kogo_shoko.py` の `prepare_and_merge` | §6.1 と本ファイルの該当節で記述済み。docxcompose を使用。 |
+| 「証拠説明書」関連 | 現実装には存在しない。将来追加の場合は別 PR。 |
+
+### 9.2 テスト件数
+
+`pytest` 実行時のテスト件数(2026-04 時点):
+
+| ファイル | 件数 |
+|---|---|
+| `tests/test_api.py` | 9 |
+| `tests/test_master.py` | 4 |
+| `tests/test_merge.py` | 26(parametrize 含む) |
+| `tests/test_settings.py` | 4 |
+| `tests/test_split.py` | 8 |
+| `tests/test_split_page_top.py` | 6 |
+| **合計** | **65** |
+
+### 9.3 残課題
+
+- [ ] 証拠説明書メタデータ(タイトル・日付・著者・立証趣旨)の取得元 — 個別マスタの本文から自動抽出するのか、別ファイル(リスト)から取り込むのか、ユーザー入力なのかが未確定。仕様確定後に SPEC.md に追記する。
 
