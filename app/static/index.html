@@ -339,11 +339,26 @@ $("btn-open-list").addEventListener("click", async () => {
   }
 });
 
-// --- 未実装ボタン (リスト自動作成 / 一覧テーブル付き結合) -------------
-$("btn-auto-list").addEventListener("click", () => {
-  const src = $("listSource").value === "master" ? "個別マスタ" : "結合甲号証";
-  addLog(`リスト自動作成 (${src} から) は未実装です。`, "warn");
+// --- リスト自動作成 ---------------------------------------------------
+$("btn-auto-list").addEventListener("click", async () => {
+  const root = getRoot();
+  if (!root) return;
+  const source = $("listSource").value;
+  const srcLabel = source === "master" ? "個別マスタ" : "結合甲号証";
+  addLog(`処理開始: 甲号証リスト自動作成 (${srcLabel} から)`, "info");
+  try {
+    const d = await apiCall("POST", "/api/auto-list", { root_folder: root, source });
+    addLog(`出力: ${d.output_path}`, "ok");
+    addLog(`書き込み ${d.numbers_written.length} 件: ${d.numbers_written.join("、")}`, "ok");
+    if (d.backup_created) addLog(`既存リストをバックアップしました (.bak)`, "info");
+    for (const w of d.warnings) addLog(w, "warn");
+    addLog("処理完了: 甲号証リスト自動作成", "ok");
+  } catch (e) {
+    addLog("リスト自動作成失敗: " + e.message, "err");
+  }
 });
+
+// --- 未実装ボタン (一覧テーブル付き結合) ------------------------------
 $("btn-table-merge").addEventListener("click", () => {
   addLog("一覧テーブル付き結合甲号証の作成は未実装です。", "warn");
 });
