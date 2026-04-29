@@ -27,7 +27,7 @@ from app.merge_service import (
     validate_master_files,
 )
 
-from tests.conftest import make_kogo_docx
+from tests.conftest import make_kogo_docx, parse_sse_events
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +139,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(app)
 
 
-def test_api_returns_409_with_issues(client: TestClient, tmp_path: Path) -> None:
-    """規約外ファイルがあると /api/merge は HTTP 409 を返す。"""
+def test_api_returns_invalid_event_with_issues(client: TestClient, tmp_path: Path) -> None:
+    """規約外ファイルがあると /api/merge の SSE で `invalid` イベントが返る。"""
     root = tmp_path / "case"
     ensure_folders(root)
     master = root / MASTER_DIRNAME
@@ -148,8 +148,13 @@ def test_api_returns_409_with_issues(client: TestClient, tmp_path: Path) -> None
     make_kogo_docx(master / "メモ.docx", "本文無し", body="番号なし")
 
     r = client.post("/api/merge", json={"root_folder": str(root)})
-    assert r.status_code == 409
-    d = r.json()
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+
+    events = parse_sse_events(r.text)
+    invalid_events = [d for t, d in events if t == "invalid"]
+    assert len(invalid_events) == 1
+    d = invalid_events[0]
     assert d["error"] == "InvalidMasterFiles"
     assert "規約外" in d["message"]
     filenames = {i["filename"] for i in d["issues"]}
@@ -158,10 +163,14 @@ def test_api_returns_409_with_issues(client: TestClient, tmp_path: Path) -> None
     by_name = {i["filename"]: i for i in d["issues"]}
     assert by_name["甲1号証.docx"]["suggested_rename"] == "甲第００１号証.docx"
     assert by_name["メモ.docx"]["suggested_rename"] is None
+    # done イベントは送出されない
+    assert not any(t == "done" for t, _ in events)
 
 
-def test_api_409_does_not_modify_filesystem(client: TestClient, tmp_path: Path) -> None:
-    """API 経由で 409 を受けても FS は不変。"""
+def test_api_invalid_event_does_not_modify_filesystem(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """SSE で invalid イベントが返っても FS は不変。"""
     root = tmp_path / "case"
     ensure_folders(root)
     master = root / MASTER_DIRNAME
@@ -169,6 +178,8 @@ def test_api_409_does_not_modify_filesystem(client: TestClient, tmp_path: Path) 
 
     before = sorted(p.name for p in master.iterdir())
     r = client.post("/api/merge", json={"root_folder": str(root)})
-    assert r.status_code == 409
+    assert r.status_code == 200
+    events = parse_sse_events(r.text)
+    assert any(t == "invalid" for t, _ in events)
     after = sorted(p.name for p in master.iterdir())
     assert before == after

@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.merge_service import MASTER_DIRNAME, ensure_folders
 
-from tests.conftest import make_kogo_docx
+from tests.conftest import make_kogo_docx, parse_sse_events
 
 
 @pytest.fixture
@@ -107,7 +107,15 @@ def test_merge_endpoint_happy_path(client: TestClient, tmp_path: Path) -> None:
 
     r = client.post("/api/merge", json={"root_folder": str(root)})
     assert r.status_code == 200
-    d = r.json()
+    assert r.headers["content-type"].startswith("text/event-stream")
+
+    events = parse_sse_events(r.text)
+    # 進捗イベントが少なくとも 1 件以上含まれる
+    assert any(t == "progress" for t, _ in events)
+    # done イベントが最後に 1 件存在する
+    done_events = [d for t, d in events if t == "done"]
+    assert len(done_events) == 1
+    d = done_events[0]
     assert sorted(d["merged_files"]) == ["甲第００１号証.docx", "甲第００２号証.docx"]
     assert Path(d["output_path"]).exists()
 

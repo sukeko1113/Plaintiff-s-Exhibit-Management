@@ -33,6 +33,36 @@ def make_kogo_docx(path: Path, marker: str, body: Optional[str] = None) -> Path:
     return path
 
 
+def parse_sse_events(body: str) -> list[tuple[str, dict]]:
+    """
+    SSE レスポンスボディ (text/event-stream) を (event_type, data_dict) のリストに分解する。
+
+    各イベントは `event: <type>\\ndata: <json>\\n\\n` の形式。
+    """
+    import json
+
+    events: list[tuple[str, dict]] = []
+    for chunk in body.split("\n\n"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        event_type = "message"
+        data_str = ""
+        for line in chunk.split("\n"):
+            if line.startswith("event:"):
+                event_type = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data_str += line[len("data:"):].strip()
+        if not data_str:
+            continue
+        try:
+            data = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+        events.append((event_type, data))
+    return events
+
+
 def collect_markers(docx_path: Path) -> list[str]:
     """
     結合後 docx から【甲第…号証(その…)】マーカーを順に拾う。

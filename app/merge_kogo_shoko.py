@@ -19,7 +19,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from docx import Document
 from docx.enum.text import WD_BREAK
@@ -30,6 +30,9 @@ from app.kogo_normalizer import (
     MARKER_PATTERN,
     detect_number,
 )
+
+
+ProgressCallback = Callable[[str], None]
 
 
 def rewrite_marker_in_document(doc_path: Path, kogo: KogoNumber, out_path: Path) -> None:
@@ -67,15 +70,27 @@ def insert_pagebreak_at_end(doc_path: Path) -> None:
     doc.save(str(doc_path))
 
 
-def merge_documents(prepared_files: List[Path], output_path: Path) -> None:
+def merge_documents(
+    prepared_files: List[Path],
+    output_path: Path,
+    *,
+    on_progress: Optional[ProgressCallback] = None,
+) -> None:
     """docxcompose で複数 docx を結合する。"""
     if not prepared_files:
         raise ValueError("結合対象ファイルがありません")
 
+    total = len(prepared_files)
     base = Document(str(prepared_files[0]))
     composer = Composer(base)
-    for f in prepared_files[1:]:
+    if on_progress:
+        on_progress(f"[結合 1/{total}] {prepared_files[0].name} を読み込み")
+    for i, f in enumerate(prepared_files[1:], start=2):
+        if on_progress:
+            on_progress(f"[結合 {i}/{total}] {f.name} を追加")
         composer.append(Document(str(f)))
+    if on_progress:
+        on_progress("出力ファイルを保存中")
     composer.save(str(output_path))
 
 
@@ -84,17 +99,21 @@ def prepare_and_merge(
     output_path: Path,
     *,
     insert_pagebreak: bool = True,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> None:
     """
     (KogoNumber, ファイル) のリストを受け取り、ソート→マーカー書き換え→結合。
 
     pairs はソート前でも構わないが、入力順をそのまま採用する場合は呼び出し側で
     並び順を整えておくこと。本関数はソートキーで安定ソートする。
+
+    on_progress が指定されていれば、各フェーズで進捗メッセージを通知する。
     """
     if not pairs:
         raise ValueError("結合対象ファイルがありません")
 
     pairs_sorted = sorted(pairs, key=lambda x: x[0].sort_key)
+    total = len(pairs_sorted)
 
     workdir = Path(tempfile.mkdtemp(prefix="kogo_merge_"))
     try:
@@ -102,13 +121,15 @@ def prepare_and_merge(
         for idx, (kogo, src) in enumerate(pairs_sorted):
             stem = kogo.normalized_filename_stem
             tmp_path = workdir / f"{idx:03d}_{stem}.docx"
+            if on_progress:
+                on_progress(f"[準備 {idx + 1}/{total}] {src.name} のマーカーを書き換え")
             rewrite_marker_in_document(src, kogo, tmp_path)
-            if insert_pagebreak and idx < len(pairs_sorted) - 1:
+            if insert_pagebreak and idx < total - 1:
                 insert_pagebreak_at_end(tmp_path)
             prepared.append(tmp_path)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        merge_documents(prepared, output_path)
+        merge_documents(prepared, output_path, on_progress=on_progress)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

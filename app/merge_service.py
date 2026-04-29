@@ -15,13 +15,13 @@ import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 from app.kogo_normalizer import (
     KogoNumber,
     detect_number,
 )
-from app.merge_kogo_shoko import prepare_and_merge
+from app.merge_kogo_shoko import ProgressCallback, prepare_and_merge
 
 
 logger = logging.getLogger(__name__)
@@ -184,18 +184,26 @@ def validate_master_files(
 # 結合のメイン
 # ---------------------------------------------------------------------------
 
-def merge_kogo(root_folder: Path) -> MergeOutcome:
+def merge_kogo(
+    root_folder: Path,
+    *,
+    on_progress: Optional[ProgressCallback] = None,
+) -> MergeOutcome:
     """
     指定ルートフォルダ配下の甲号証を結合する。
 
     個別マスタ配下の docx を事前バリデーションし、規約外ファイルがあれば
     InvalidMasterFilesError を送出する (FS は変更しない)。
+
+    on_progress が指定されていれば、各フェーズで進捗メッセージを通知する。
     """
     root = ensure_folders(Path(root_folder))
     master_dir = root / MASTER_DIRNAME
     output_dir = root / OUTPUT_DIRNAME
     output_path = output_dir / OUTPUT_FILENAME
 
+    if on_progress:
+        on_progress("バリデーション中: 個別マスタを検査しています")
     pairs, issues = validate_master_files(master_dir)
 
     if issues:
@@ -212,15 +220,20 @@ def merge_kogo(root_folder: Path) -> MergeOutcome:
             warnings=warnings + ["結合対象のファイルがありません"],
         )
 
+    if on_progress:
+        on_progress(f"バリデーション完了: {len(pairs)} 件のファイルを検出")
+
     # 既存出力をバックアップ
     if output_path.exists():
         backup = output_path.with_suffix(output_path.suffix + BACKUP_SUFFIX)
         shutil.copy2(output_path, backup)
         logger.info("既存の結合ファイルをバックアップ: %s", backup)
+        if on_progress:
+            on_progress(f"既存の結合ファイルをバックアップ: {backup.name}")
 
     # 正規化ファイル名で辞書順ソート (= 主番号昇順 → 枝番なし → 枝番昇順)
     pairs.sort(key=lambda x: x[1].name)
-    prepare_and_merge(pairs, output_path, insert_pagebreak=True)
+    prepare_and_merge(pairs, output_path, insert_pagebreak=True, on_progress=on_progress)
 
     return MergeOutcome(
         output_path=output_path,

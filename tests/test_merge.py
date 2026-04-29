@@ -138,6 +138,26 @@ def test_merge_empty_master(root_folder: Path) -> None:
     assert any("結合対象のファイルがありません" in w for w in outcome.warnings)
 
 
+def test_merge_invokes_progress_callback(root_folder: Path) -> None:
+    """on_progress コールバックが各フェーズで呼ばれる。"""
+    ensure_folders(root_folder)
+    master = root_folder / MASTER_DIRNAME
+    make_kogo_docx(master / "甲第００１号証.docx", "【甲第１号証】")
+    make_kogo_docx(master / "甲第００２号証.docx", "【甲第２号証】")
+
+    messages: list[str] = []
+    merge_kogo(root_folder, on_progress=messages.append)
+
+    # バリデーション、準備、結合、保存の各フェーズが含まれる
+    assert any("バリデーション" in m for m in messages)
+    assert any("準備" in m for m in messages)
+    assert any("結合" in m for m in messages)
+    assert any("保存" in m for m in messages)
+    # 各ファイル名がメッセージに登場する
+    assert any("甲第００１号証" in m for m in messages)
+    assert any("甲第００２号証" in m for m in messages)
+
+
 # ---------------------------------------------------------------------------
 # 結合後の本文マーカーが昇順
 # ---------------------------------------------------------------------------
