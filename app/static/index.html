@@ -68,38 +68,9 @@
               <i data-lucide="combine" class="w-5 h-5 mr-2"></i>
               個別マスタの結合
             </div>
-            <p class="text-sm text-left text-blue-600/80">リストに従い、個別ファイルを一つに結合します。</p>
+            <p class="text-sm text-left text-blue-600/80">個別マスタ内のファイルを番号順に一つに結合します。</p>
           </button>
         </div>
-      </section>
-
-      <!-- リスト・テーブル操作 -->
-      <section class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-        <h2 class="text-lg font-semibold mb-4 text-gray-800 border-b pb-2">リスト・証拠説明書の作成</h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-          <button id="btn-open-list"
-            class="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-            <i data-lucide="file-text" class="w-5 h-5 mr-3 text-gray-500"></i>
-            <span class="font-medium text-gray-700">甲号証リストをWordで開く</span>
-          </button>
-
-          <div class="flex border border-gray-200 rounded-lg overflow-hidden">
-            <select id="listSource" class="bg-gray-50 px-3 border-r border-gray-200 text-sm focus:outline-none">
-              <option value="master">個別マスタから</option>
-              <option value="combined">結合甲号証から</option>
-            </select>
-            <button id="btn-auto-list"
-              class="flex-1 bg-white hover:bg-gray-50 px-4 py-3 font-medium text-gray-700 transition-colors text-left">
-              リスト自動作成
-            </button>
-          </div>
-        </div>
-
-        <button id="btn-table-merge"
-          class="w-full flex items-center justify-center p-4 border border-green-200 bg-green-50 rounded-lg hover:bg-green-100 transition-colors text-green-700 font-medium">
-          <i data-lucide="list-ordered" class="w-5 h-5 mr-2"></i>
-          【案件ファイル基準】一覧テーブル付き結合甲号証の作成
-        </button>
       </section>
 
       <!-- 証拠説明書 (一覧テーブル) プレビュー -->
@@ -264,13 +235,31 @@ $("btn-merge").addEventListener("click", async () => {
   if (!root) return;
   addLog("処理開始: 個別マスタの結合", "info");
   try {
-    const d = await apiCall("POST", "/api/merge", { root_folder: root });
-    addLog(`結合ファイル: ${d.output_path}`, "ok");
-    addLog(`甲号証リスト使用: ${d.list_used ? "はい" : "いいえ"}`, "info");
-    addLog(`結合 ${d.merged_files.length} 件: ${d.merged_files.join("、")}`, "ok");
-    if (d.missing_in_master.length) {
-      for (const m of d.missing_in_master) addLog(`リスト記載・個別マスタに不在: ${m}`, "warn");
+    const r = await fetch("/api/merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root_folder: root }),
+    });
+    const text = await r.text();
+    let d;
+    try { d = text ? JSON.parse(text) : null; } catch { d = { detail: text }; }
+
+    if (r.status === 409 && d && d.error === "InvalidMasterFiles") {
+      addLog(d.message, "err");
+      for (const issue of (d.issues || [])) {
+        const suggest = issue.suggested_rename
+          ? `（推奨リネーム: ${issue.suggested_rename}）`
+          : "";
+        addLog(`規約外: ${issue.filename} — ${issue.reason}${suggest}`, "warn");
+      }
+      addLog("ファイル名を修正してから再度お試しください。", "warn");
+      return;
     }
+    if (!r.ok) {
+      throw new Error((d && d.detail) || r.statusText);
+    }
+    addLog(`結合ファイル: ${d.output_path}`, "ok");
+    addLog(`結合 ${d.merged_files.length} 件: ${d.merged_files.join("、")}`, "ok");
     for (const w of d.warnings) addLog(w, "warn");
     addLog("処理完了: 個別マスタの結合", "ok");
   } catch (e) {
@@ -325,27 +314,6 @@ $("modal-ok").addEventListener("click", () => {
   const a = modalConfirmAction;
   hideModal();
   if (a) a();
-});
-
-// --- 甲号証リストを開く -----------------------------------------------
-$("btn-open-list").addEventListener("click", async () => {
-  const root = getRoot();
-  if (!root) return;
-  try {
-    const d = await apiCall("POST", "/api/open-list", { root_folder: root });
-    addLog("Word で開きました: " + d.opened_path, "ok");
-  } catch (e) {
-    addLog("ファイルを開けませんでした: " + e.message, "err");
-  }
-});
-
-// --- 未実装ボタン (リスト自動作成 / 一覧テーブル付き結合) -------------
-$("btn-auto-list").addEventListener("click", () => {
-  const src = $("listSource").value === "master" ? "個別マスタ" : "結合甲号証";
-  addLog(`リスト自動作成 (${src} から) は未実装です。`, "warn");
-});
-$("btn-table-merge").addEventListener("click", () => {
-  addLog("一覧テーブル付き結合甲号証の作成は未実装です。", "warn");
 });
 
 // --- 証拠説明書プレビューテーブル -------------------------------------

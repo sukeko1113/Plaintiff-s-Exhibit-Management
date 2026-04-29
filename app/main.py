@@ -7,7 +7,6 @@
 - GET  /api/settings    : 保存済みルートフォルダ
 - POST /api/settings    : ルートフォルダを保存
 - POST /api/setup       : ルートを保存 + フォルダ構成を確認/生成
-- POST /api/open-list   : 甲号証リスト.docx を OS の既定アプリで開く
 - POST /api/merge       : 結合
 - POST /api/split       : 分解
 - GET  /api/master      : 個別マスタ一覧
@@ -16,22 +15,20 @@
 from __future__ import annotations
 
 import logging
-import os
-import subprocess
-import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.master_service import list_master
 from app.merge_service import (
-    LIST_FILENAME,
+    DEPRECATED_LIST_FILENAME,
     MASTER_DIRNAME,
     OUTPUT_DIRNAME,
+    InvalidMasterFilesError,
     ensure_folders,
     merge_kogo,
 )
@@ -65,15 +62,9 @@ class SetupResult(BaseModel):
     messages: List[str]
 
 
-class OpenListResult(BaseModel):
-    opened_path: str
-
-
 class MergeResult(BaseModel):
     output_path: str
     merged_files: List[str]
-    list_used: bool
-    missing_in_master: List[str]
     warnings: List[str]
 
 
@@ -147,20 +138,20 @@ def post_settings(req: SettingsModel) -> SettingsModel:
 
 
 # ---------------------------------------------------------------------------
-# フォルダ構成確認 (ルートを保存 + 必要なフォルダ・リストを生成)
+# フォルダ構成確認 (ルートを保存 + 必要なフォルダを生成)
 # ---------------------------------------------------------------------------
 
 @app.post("/api/setup", response_model=SetupResult)
 def setup_endpoint(req: RootFolderRequest) -> SetupResult:
     root = Path(req.root_folder).expanduser()
 
-    list_path = root / LIST_FILENAME
     master_dir = root / MASTER_DIRNAME
     output_dir = root / OUTPUT_DIRNAME
+    deprecated_list_path = root / DEPRECATED_LIST_FILENAME
 
-    list_existed = list_path.exists()
     master_existed = master_dir.exists()
     output_existed = output_dir.exists()
+    deprecated_list_existed = deprecated_list_path.exists()
 
     try:
         ensure_folders(root)
@@ -171,35 +162,15 @@ def setup_endpoint(req: RootFolderRequest) -> SetupResult:
 
     messages: List[str] = [
         f"ルートフォルダを設定しました: {root}",
-        "「甲号証リスト.docx」を" + ("確認しました。" if list_existed else "新規作成しました。"),
         "「個別マスタ」フォルダを" + ("確認しました。" if master_existed else "新規作成しました。"),
         "「結合甲号証」フォルダを" + ("確認しました。" if output_existed else "新規作成しました。"),
     ]
+    if deprecated_list_existed:
+        messages.append(
+            "「甲号証リスト.docx」は廃止されました。必要に応じて手動で削除してください。"
+        )
 
     return SetupResult(root_folder=str(root), messages=messages)
-
-
-# ---------------------------------------------------------------------------
-# 甲号証リストを Word で開く
-# ---------------------------------------------------------------------------
-
-@app.post("/api/open-list", response_model=OpenListResult)
-def open_list_endpoint(req: RootFolderRequest) -> OpenListResult:
-    root = _require_existing_root(req.root_folder)
-    ensure_folders(root)
-    list_path = root / LIST_FILENAME
-
-    try:
-        if os.name == "nt":
-            os.startfile(str(list_path))  # type: ignore[attr-defined]
-        elif sys.platform == "darwin":
-            subprocess.run(["open", str(list_path)], check=False)
-        else:
-            subprocess.run(["xdg-open", str(list_path)], check=False)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"ファイルを開けませんでした: {e}")
-
-    return OpenListResult(opened_path=str(list_path))
 
 
 # ---------------------------------------------------------------------------
@@ -207,14 +178,29 @@ def open_list_endpoint(req: RootFolderRequest) -> OpenListResult:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/merge", response_model=MergeResult)
-def merge_endpoint(req: RootFolderRequest) -> MergeResult:
+def merge_endpoint(req: RootFolderRequest) -> Any:
     root = _require_existing_root(req.root_folder)
-    outcome = merge_kogo(root)
+    try:
+        outcome = merge_kogo(root)
+    except InvalidMasterFilesError as e:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "InvalidMasterFiles",
+                "message": "個別マスタに規約外のファイルがあるため、結合を中止しました",
+                "issues": [
+                    {
+                        "filename": i.filename,
+                        "reason": i.reason,
+                        "suggested_rename": i.suggested_rename,
+                    }
+                    for i in e.issues
+                ],
+            },
+        )
     return MergeResult(
         output_path=str(outcome.output_path),
         merged_files=outcome.merged_files,
-        list_used=outcome.list_used,
-        missing_in_master=outcome.missing_in_master,
         warnings=outcome.warnings,
     )
 

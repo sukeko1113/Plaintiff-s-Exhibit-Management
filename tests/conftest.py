@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 import pytest
 from docx import Document
@@ -28,32 +28,6 @@ def make_kogo_docx(path: Path, marker: str, body: Optional[str] = None) -> Path:
     doc = Document()
     doc.add_paragraph(marker)
     doc.add_paragraph(body if body is not None else "テスト用本文。")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc.save(str(path))
-    return path
-
-
-def make_list_docx(path: Path, lines: Iterable[str]) -> Path:
-    """
-    甲号証リスト.docx を生成。各 line を1段落として書き込む。
-    """
-    doc = Document()
-    for line in lines:
-        doc.add_paragraph(line)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc.save(str(path))
-    return path
-
-
-def make_list_docx_with_table(path: Path, lines: Iterable[str]) -> Path:
-    """
-    各行をテーブルセルに格納したリスト docx を生成。
-    """
-    lines = list(lines)
-    doc = Document()
-    table = doc.add_table(rows=len(lines), cols=1)
-    for i, line in enumerate(lines):
-        table.rows[i].cells[0].text = line
     path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(path))
     return path

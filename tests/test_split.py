@@ -20,7 +20,7 @@ from app.kogo_normalizer import KogoNumber
 from app.split_evidence_docx import split_docx
 from app.split_service import split_kogo
 
-from tests.conftest import collect_markers, make_kogo_docx, make_list_docx
+from tests.conftest import collect_markers, make_kogo_docx
 
 
 def _make_combined(root: Path, ids: list[int]) -> Path:
@@ -64,7 +64,6 @@ def test_split_docx_branch_numbers(tmp_path: Path) -> None:
     master = root / MASTER_DIRNAME
     make_kogo_docx(master / "甲第０１２号証その１.docx", "【甲第０１２号証その１】")
     make_kogo_docx(master / "甲第０１２号証その２.docx", "【甲第０１２号証その２】")
-    make_list_docx(root / "甲号証リスト.docx", ["甲第０１２号証その１", "甲第０１２号証その２"])
     combined = merge_kogo(root).output_path
 
     out_dir = tmp_path / "split_branch_out"
