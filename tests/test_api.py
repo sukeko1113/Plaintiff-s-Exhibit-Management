@@ -40,16 +40,34 @@ def test_setup_creates_folders_and_saves_settings(client: TestClient, tmp_path: 
     # フォルダ作成のメッセージが含まれる
     assert any("個別マスタ" in m for m in d["messages"])
     assert any("結合甲号証" in m for m in d["messages"])
-    assert any("甲号証リスト" in m for m in d["messages"])
+    # 甲号証リスト.docx は廃止済み: messages にも作成済みファイルにも含まれない
+    assert not any("新規作成" in m and "リスト" in m for m in d["messages"])
 
     # 実フォルダが作成されている
     assert (target / "個別マスタ").is_dir()
     assert (target / "結合甲号証").is_dir()
-    assert (target / "甲号証リスト.docx").is_file()
+    # 甲号証リスト.docx は作成されない (廃止)
+    assert not (target / "甲号証リスト.docx").exists()
 
     # 設定にも保存されている
     r2 = client.get("/api/settings")
     assert r2.json()["root_folder"] == str(target)
+
+
+def test_setup_warns_about_legacy_list_file(client: TestClient, tmp_path: Path) -> None:
+    """既存の 甲号証リスト.docx が残っている場合、廃止案内を返す。"""
+    target = tmp_path / "case_legacy"
+    target.mkdir()
+    legacy = target / "甲号証リスト.docx"
+    legacy.write_bytes(b"dummy content")
+
+    r = client.post("/api/setup", json={"root_folder": str(target)})
+    assert r.status_code == 200
+    d = r.json()
+    assert any("廃止" in m for m in d["messages"])
+    # アプリ側でファイルを削除も移動もしない
+    assert legacy.exists()
+    assert legacy.read_bytes() == b"dummy content"
 
 
 def test_setup_second_call_reports_existing(client: TestClient, tmp_path: Path) -> None:
@@ -90,7 +108,6 @@ def test_merge_endpoint_happy_path(client: TestClient, tmp_path: Path) -> None:
     r = client.post("/api/merge", json={"root_folder": str(root)})
     assert r.status_code == 200
     d = r.json()
-    assert d["list_used"] is False
     assert sorted(d["merged_files"]) == ["甲第００１号証.docx", "甲第００２号証.docx"]
     assert Path(d["output_path"]).exists()
 
