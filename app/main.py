@@ -14,12 +14,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import queue
+import threading
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Iterator, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -174,34 +177,89 @@ def setup_endpoint(req: RootFolderRequest) -> SetupResult:
 
 
 # ---------------------------------------------------------------------------
-# 結合
+# 結合 (Server-Sent Events で進捗通知)
 # ---------------------------------------------------------------------------
 
-@app.post("/api/merge", response_model=MergeResult)
-def merge_endpoint(req: RootFolderRequest) -> Any:
-    root = _require_existing_root(req.root_folder)
+def _sse_format(event_type: str, data: dict) -> str:
+    """1 件の SSE イベントを `event:` + `data:` の形式に整形する。"""
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event_type}\ndata: {payload}\n\n"
+
+
+def _run_merge_with_progress(
+    root: Path, q: "queue.Queue[Optional[tuple]]"
+) -> None:
+    """別スレッドで merge を実行し、進捗・完了・エラーをキューに流す。"""
+    def push_progress(message: str) -> None:
+        q.put(("progress", {"message": message}))
+
     try:
-        outcome = merge_kogo(root)
-    except InvalidMasterFilesError as e:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "error": "InvalidMasterFiles",
-                "message": "個別マスタに規約外のファイルがあるため、結合を中止しました",
-                "issues": [
-                    {
-                        "filename": i.filename,
-                        "reason": i.reason,
-                        "suggested_rename": i.suggested_rename,
-                    }
-                    for i in e.issues
-                ],
-            },
+        outcome = merge_kogo(root, on_progress=push_progress)
+        q.put(
+            (
+                "done",
+                {
+                    "output_path": str(outcome.output_path),
+                    "merged_files": outcome.merged_files,
+                    "warnings": outcome.warnings,
+                },
+            )
         )
-    return MergeResult(
-        output_path=str(outcome.output_path),
-        merged_files=outcome.merged_files,
-        warnings=outcome.warnings,
+    except InvalidMasterFilesError as e:
+        q.put(
+            (
+                "invalid",
+                {
+                    "error": "InvalidMasterFiles",
+                    "message": "個別マスタに規約外のファイルがあるため、結合を中止しました",
+                    "issues": [
+                        {
+                            "filename": i.filename,
+                            "reason": i.reason,
+                            "suggested_rename": i.suggested_rename,
+                        }
+                        for i in e.issues
+                    ],
+                },
+            )
+        )
+    except Exception as e:  # pragma: no cover - 想定外
+        q.put(("error", {"message": f"結合中にエラーが発生しました: {e}"}))
+    finally:
+        q.put(None)  # ストリーム終了マーカー
+
+
+@app.post("/api/merge")
+def merge_endpoint(req: RootFolderRequest) -> Any:
+    """
+    Server-Sent Events で進捗を返却する。
+
+    イベント種別:
+    - `progress`: 進捗メッセージ (`{"message": "..."}`)
+    - `done`: 正常終了 (`MergeResult` 相当)
+    - `invalid`: 規約外ファイル検出 (`{error, message, issues[]}`)
+    - `error`: 想定外エラー
+    """
+    root = _require_existing_root(req.root_folder)
+
+    q: "queue.Queue[Optional[tuple]]" = queue.Queue()
+    thread = threading.Thread(
+        target=_run_merge_with_progress, args=(root, q), daemon=True
+    )
+    thread.start()
+
+    def event_stream() -> Iterator[str]:
+        while True:
+            item = q.get()
+            if item is None:
+                break
+            event_type, data = item
+            yield _sse_format(event_type, data)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

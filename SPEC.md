@@ -190,7 +190,17 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ### 5.6 POST `/api/merge`
 - **機能:** 個別マスタ配下の Word ファイルを正規化ファイル名の辞書順で 1 つに結合(docxcompose 使用)
 - **リクエスト:** `RootFolderRequest`
-- **正常時レスポンス (200):** `MergeResult`
+- **レスポンス形式:** **Server-Sent Events (`text/event-stream`)** で進捗を逐次送出。HTTP ステータスは正常時・規約外ファイル時とも `200`(処理結果はイベント種別で判別)
+- **イベント種別:**
+
+| イベント | データ形式 | 意味 |
+|---|---|---|
+| `progress` | `{"message": "..."}` | 進捗メッセージ。各フェーズ(バリデーション / 準備 / 結合 / 保存)で送出 |
+| `done` | `{"output_path", "merged_files", "warnings"}` | 正常終了。最後に 1 件だけ送出される |
+| `invalid` | `{"error", "message", "issues"[]}` | 規約外ファイル検出。最後に 1 件だけ送出される(`done` は出ない) |
+| `error` | `{"message"}` | 想定外のエラー |
+
+- **`done` イベントのデータ例:**
 ```json
   {
     "output_path": "...",
@@ -198,9 +208,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
     "warnings": []
   }
 ```
-  - `merged_files`: 結合に使用したファイル名(辞書順)
-  - `warnings`: その他の警告メッセージ
-- **規約外ファイル時のレスポンス (409 Conflict):**
+- **`invalid` イベントのデータ例:**
 ```json
   {
     "error": "InvalidMasterFiles",
@@ -215,17 +223,30 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
         "filename": "メモ.docx",
         "reason": "甲号証番号を抽出できません",
         "suggested_rename": null
-      },
-      {
-        "filename": "甲第００２号証 (1).docx",
-        "reason": "甲第００２号証.docx と番号が重複しています",
-        "suggested_rename": null
       }
     ]
   }
 ```
   - 規約外ファイル保護フローの詳細は §6.1.4 参照。
-- **エラー:** ルートが存在しない → HTTP 400
+- **`progress` イベントのメッセージ例:**
+  - `バリデーション中: 個別マスタを検査しています`
+  - `バリデーション完了: 10 件のファイルを検出`
+  - `[準備 1/10] 甲第００１号証.docx のマーカーを書き換え`
+  - `[結合 5/10] 甲第００５号証.docx を追加`
+  - `出力ファイルを保存中`
+- **配信フォーマット (text/event-stream):**
+```
+event: progress
+data: {"message": "バリデーション中: 個別マスタを検査しています"}
+
+event: progress
+data: {"message": "[準備 1/2] 甲第００１号証.docx のマーカーを書き換え"}
+
+event: done
+data: {"output_path": "...", "merged_files": ["甲第００１号証.docx", "甲第００２号証.docx"], "warnings": []}
+```
+- **実装メモ:** バックエンドは別スレッドで `merge_kogo()` を実行し、`queue.Queue` 経由でメインスレッド側の `StreamingResponse` に進捗を流す
+- **エラー:** ルートが存在しない → HTTP 400 (こちらは JSON で返却)
 
 ### 5.7 POST `/api/split`
 - **機能:** 結合済みの Word ファイルを甲号証番号単位で分解
@@ -287,11 +308,13 @@ GET /api/master?root_folder=C:\Users...
 #### 6.1.2 処理の流れ
 1. `ensure_folders()` でルート配下の必要なフォルダを保証
 2. `validate_master_files()` で個別マスタ配下の docx を**事前バリデーション**(§6.1.4)
-3. 規約外ファイルが 1 件でも見つかった場合は `InvalidMasterFilesError` を送出して**結合を中止**(API 層は HTTP 409 を返却、§5.6)。ファイルシステムには一切変更を加えない
+3. 規約外ファイルが 1 件でも見つかった場合は `InvalidMasterFilesError` を送出して**結合を中止**(API 層は SSE の `invalid` イベントを送出、§5.6)。ファイルシステムには一切変更を加えない
 4. 規約準拠ファイルの (KogoNumber, Path) リストを **正規化ファイル名(`path.name`)の辞書順**でソート
 5. 既存出力があれば `.bak` にバックアップ
 6. `prepare_and_merge()`(`docxcompose` を内部で利用)を呼び出してページ区切りを挿入しつつ結合
 7. `MergeOutcome` を返却
+
+`merge_kogo()` は任意のキーワード引数 `on_progress: Callable[[str], None]` を受け取り、各フェーズ(バリデーション開始 / 完了 / 既存出力バックアップ / 各ファイルのマーカー書き換え / 各ファイルの結合 / 出力保存)で進捗メッセージを通知する。SSE ストリーミングでこのコールバックを使い、フロントエンドのログ欄にリアルタイム表示する(§5.6)。
 
 #### 6.1.3 ソート規則
 - ソートキーは正規化ファイル名(`path.name`)そのまま(辞書順)
@@ -328,7 +351,9 @@ canonical(正規化形式に一致するファイル)を先に登録してから
 
 ##### 確認テスト
 - `tests/test_merge_sort.py` — ソート規則(主番号順、枝番なし先、`~$` 除外)
-- `tests/test_merge_validation.py` — 規約外ファイル時の 409、FS 不変、`suggested_rename` 付与条件、規約準拠時の正常結合
+- `tests/test_merge_validation.py` — 規約外ファイル時の SSE `invalid` イベント、FS 不変、`suggested_rename` 付与条件、規約準拠時の正常結合
+- `tests/test_merge.py::test_merge_invokes_progress_callback` — `on_progress` が各フェーズで呼ばれる
+- `tests/test_api.py::test_merge_endpoint_happy_path` — `/api/merge` が `text/event-stream` を返し、`progress` と `done` イベントが正しく流れる
 
 ---
 
@@ -495,13 +520,13 @@ class KogoNumber:
 |---|---|
 | `tests/test_api.py` | 10 |
 | `tests/test_master.py` | 4 |
-| `tests/test_merge.py` | 27(parametrize 含む) |
+| `tests/test_merge.py` | 28(parametrize 含む) |
 | `tests/test_merge_sort.py` | 4 |
 | `tests/test_merge_validation.py` | 8 |
 | `tests/test_settings.py` | 4 |
 | `tests/test_split.py` | 8 |
 | `tests/test_split_page_top.py` | 6 |
-| **合計** | **71** |
+| **合計** | **72** |
 
 ### 9.3 残課題
 

@@ -229,43 +229,90 @@ $("btn-setup").addEventListener("click", async () => {
   }
 });
 
-// --- 結合 --------------------------------------------------------------
+// --- 結合 (Server-Sent Events で進捗を受信) --------------------------
 $("btn-merge").addEventListener("click", async () => {
   const root = getRoot();
   if (!root) return;
   addLog("処理開始: 個別マスタの結合", "info");
+
+  let response;
   try {
-    const r = await fetch("/api/merge", {
+    response = await fetch("/api/merge", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ root_folder: root }),
     });
-    const text = await r.text();
-    let d;
-    try { d = text ? JSON.parse(text) : null; } catch { d = { detail: text }; }
+  } catch (e) {
+    addLog("結合失敗: " + e.message, "err");
+    return;
+  }
 
-    if (r.status === 409 && d && d.error === "InvalidMasterFiles") {
-      addLog(d.message, "err");
-      for (const issue of (d.issues || [])) {
-        const suggest = issue.suggested_rename
-          ? `（推奨リネーム: ${issue.suggested_rename}）`
-          : "";
-        addLog(`規約外: ${issue.filename} — ${issue.reason}${suggest}`, "warn");
+  if (!response.ok && response.status !== 200) {
+    // ルート未存在等の事前エラーは JSON で返る
+    let errMsg = response.statusText;
+    try {
+      const d = await response.json();
+      if (d && d.detail) errMsg = d.detail;
+    } catch (_) {}
+    addLog("結合失敗: " + errMsg, "err");
+    return;
+  }
+
+  // text/event-stream を 1 イベントずつ読み取る
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // \n\n 区切りでイベントを切り出す
+      let sepIdx;
+      while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
+        const chunk = buffer.slice(0, sepIdx);
+        buffer = buffer.slice(sepIdx + 2);
+        handleSseEvent(chunk);
       }
-      addLog("ファイル名を修正してから再度お試しください。", "warn");
-      return;
     }
-    if (!r.ok) {
-      throw new Error((d && d.detail) || r.statusText);
-    }
-    addLog(`結合ファイル: ${d.output_path}`, "ok");
-    addLog(`結合 ${d.merged_files.length} 件: ${d.merged_files.join("、")}`, "ok");
-    for (const w of d.warnings) addLog(w, "warn");
-    addLog("処理完了: 個別マスタの結合", "ok");
   } catch (e) {
     addLog("結合失敗: " + e.message, "err");
   }
 });
+
+function handleSseEvent(chunk) {
+  // chunk 例: "event: progress\ndata: {\"message\": \"...\"}"
+  let eventType = "message";
+  let dataStr = "";
+  for (const line of chunk.split("\n")) {
+    if (line.startsWith("event:")) eventType = line.slice(6).trim();
+    else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
+  }
+  if (!dataStr) return;
+  let data;
+  try { data = JSON.parse(dataStr); } catch { return; }
+
+  if (eventType === "progress") {
+    addLog(data.message, "info");
+  } else if (eventType === "done") {
+    addLog(`結合ファイル: ${data.output_path}`, "ok");
+    addLog(`結合 ${data.merged_files.length} 件: ${data.merged_files.join("、")}`, "ok");
+    for (const w of (data.warnings || [])) addLog(w, "warn");
+    addLog("処理完了: 個別マスタの結合", "ok");
+  } else if (eventType === "invalid") {
+    addLog(data.message, "err");
+    for (const issue of (data.issues || [])) {
+      const suggest = issue.suggested_rename
+        ? `（推奨リネーム: ${issue.suggested_rename}）`
+        : "";
+      addLog(`規約外: ${issue.filename} — ${issue.reason}${suggest}`, "warn");
+    }
+    addLog("ファイル名を修正してから再度お試しください。", "warn");
+  } else if (eventType === "error") {
+    addLog(data.message, "err");
+  }
+}
 
 // --- 分解 (確認モーダル経由) ------------------------------------------
 $("btn-split").addEventListener("click", async () => {
