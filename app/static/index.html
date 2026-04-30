@@ -73,30 +73,43 @@
         </div>
       </section>
 
-      <!-- 証拠説明書 (一覧テーブル) プレビュー -->
+      <!-- 証拠説明書 (一覧テーブル) -->
       <section class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold text-gray-800 flex items-center">
             <i data-lucide="file-box" class="w-5 h-5 mr-2 text-indigo-500"></i>
-            証拠説明書（一覧テーブル）プレビュー
+            証拠説明書（一覧テーブル）
           </h2>
           <button id="btn-refresh-table" class="text-xs text-gray-500 hover:text-gray-700">再読込</button>
         </div>
         <div class="overflow-x-auto">
-          <table class="w-full text-sm text-left border-collapse border border-gray-300">
+          <table class="w-full text-sm text-left border-collapse">
             <thead class="bg-gray-100 text-gray-700">
               <tr>
+                <th class="border border-gray-300 p-2 whitespace-nowrap text-center w-16">編集</th>
+                <th class="border border-gray-300 p-2 whitespace-nowrap text-center w-20">自動入力</th>
                 <th class="border border-gray-300 p-2 whitespace-nowrap">号証</th>
-                <th class="border border-gray-300 p-2 min-w-[200px]">標目（証拠の名称）</th>
-                <th class="border border-gray-300 p-2 whitespace-nowrap">作成年月日</th>
-                <th class="border border-gray-300 p-2 whitespace-nowrap">作成者</th>
-                <th class="border border-gray-300 p-2 min-w-[300px]">立証趣旨（証明事項）</th>
+                <th class="border border-gray-300 p-2 min-w-[180px]">標目</th>
+                <th class="border border-gray-300 p-2 whitespace-nowrap min-w-[140px]">作成年月日</th>
+                <th class="border border-gray-300 p-2 whitespace-nowrap min-w-[140px]">作成者</th>
+                <th class="border border-gray-300 p-2 min-w-[280px]">立証趣旨</th>
+                <th class="border border-gray-300 p-2 whitespace-nowrap text-center w-16">保存</th>
               </tr>
             </thead>
             <tbody id="tbl-body">
-              <tr><td colspan="5" class="border border-gray-300 p-3 text-center text-gray-500">ルートフォルダを設定してください。</td></tr>
+              <tr><td colspan="8" class="border border-gray-300 p-3 text-center text-gray-500">ルートフォルダを設定してください。</td></tr>
             </tbody>
           </table>
+        </div>
+        <div id="tbl-legend" class="mt-3 hidden items-center space-x-4 text-xs text-gray-500">
+          <span class="flex items-center">
+            <span class="inline-block w-1 h-3 bg-orange-400 mr-1"></span>
+            未保存の編集あり
+          </span>
+          <span class="flex items-center">
+            <span class="inline-block w-1 h-3 bg-red-500 mr-1"></span>
+            エラー
+          </span>
         </div>
       </section>
 
@@ -151,7 +164,7 @@
 const $ = (id) => document.getElementById(id);
 
 // --- ログ管理 ----------------------------------------------------------
-const state = { logs: [] };
+const state = { logs: [], metadata: {} };
 function addLog(message, type = "info") {
   const time = new Date().toLocaleTimeString();
   state.logs.unshift({ time, message, type });
@@ -363,33 +376,250 @@ $("modal-ok").addEventListener("click", () => {
   if (a) a();
 });
 
-// --- 証拠説明書プレビューテーブル -------------------------------------
+// --- 証拠説明書テーブル -----------------------------------------------
+function setLegendVisible(visible) {
+  const el = $("tbl-legend");
+  if (visible) {
+    el.classList.remove("hidden");
+    el.classList.add("flex");
+  } else {
+    el.classList.add("hidden");
+    el.classList.remove("flex");
+  }
+}
+
+function getRowEl(key) {
+  return document.querySelector(`tr[data-key="${CSS.escape(key)}"]`);
+}
+
+function setRowDirty(key, dirty) {
+  const tr = getRowEl(key);
+  if (!tr) return;
+  const meta = state.metadata[key];
+  if (meta) meta.dirty = dirty;
+  tr.classList.remove("border-l-transparent", "border-l-orange-400", "border-l-red-500");
+  if (meta && meta.error) {
+    tr.classList.add("border-l-red-500");
+  } else if (dirty) {
+    tr.classList.add("border-l-orange-400");
+  } else {
+    tr.classList.add("border-l-transparent");
+  }
+  const btn = tr.querySelector(".btn-save");
+  if (btn) btn.disabled = !dirty || (meta && meta.saving);
+}
+
+function setRowError(key, isError) {
+  const tr = getRowEl(key);
+  if (!tr) return;
+  const meta = state.metadata[key];
+  if (meta) meta.error = isError;
+  tr.classList.remove("border-l-transparent", "border-l-orange-400", "border-l-red-500");
+  if (isError) {
+    tr.classList.add("border-l-red-500");
+  } else if (meta && meta.dirty) {
+    tr.classList.add("border-l-orange-400");
+  } else {
+    tr.classList.add("border-l-transparent");
+  }
+}
+
+function setRowSaving(key, saving) {
+  const tr = getRowEl(key);
+  if (!tr) return;
+  const meta = state.metadata[key];
+  if (meta) meta.saving = saving;
+  const btn = tr.querySelector(".btn-save");
+  if (!btn) return;
+  btn.disabled = saving || !(meta && meta.dirty);
+  btn.innerHTML = saving
+    ? '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>'
+    : '<i data-lucide="save" class="w-4 h-4"></i>';
+  if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+}
+
+function buildRowHtml(key, displayId) {
+  const meta = state.metadata[key] || { title: "", created_date: "", author: "", purpose: "" };
+  return `<tr data-key="${escapeHtml(key)}" class="bg-white hover:bg-gray-50 border-l-4 border-l-transparent">
+    <td class="border border-gray-300 p-2 text-center">
+      <button type="button" class="btn-edit p-2 rounded hover:bg-blue-50 text-blue-600 transition-colors" title="Word で開く">
+        <i data-lucide="edit-3" class="w-4 h-4"></i>
+      </button>
+    </td>
+    <td class="border border-gray-300 p-2 text-center">
+      <button type="button" class="btn-extract p-2 rounded hover:bg-indigo-50 text-indigo-600 transition-colors" title="AI で自動入力(下書きを生成。確認後に保存ボタンで確定)">
+        <i data-lucide="sparkles" class="w-4 h-4"></i>
+      </button>
+    </td>
+    <td class="border border-gray-300 p-2 font-medium whitespace-nowrap">${displayId}</td>
+    <td class="border border-gray-300 p-1">
+      <input type="text" class="fld-title w-full p-1 border border-transparent hover:border-gray-300 focus:border-blue-400 focus:outline-none rounded" value="${escapeHtml(meta.title)}" />
+    </td>
+    <td class="border border-gray-300 p-1">
+      <input type="text" class="fld-created-date w-full p-1 border border-transparent hover:border-gray-300 focus:border-blue-400 focus:outline-none rounded" value="${escapeHtml(meta.created_date)}" />
+    </td>
+    <td class="border border-gray-300 p-1">
+      <input type="text" class="fld-author w-full p-1 border border-transparent hover:border-gray-300 focus:border-blue-400 focus:outline-none rounded" value="${escapeHtml(meta.author)}" />
+    </td>
+    <td class="border border-gray-300 p-1">
+      <textarea rows="3" class="fld-purpose w-full p-1 border border-transparent hover:border-gray-300 focus:border-blue-400 focus:outline-none rounded resize-y">${escapeHtml(meta.purpose)}</textarea>
+    </td>
+    <td class="border border-gray-300 p-2 text-center">
+      <button type="button" class="btn-save p-2 rounded hover:bg-green-50 text-green-600 disabled:opacity-30 disabled:hover:bg-transparent transition-colors" disabled title="保存">
+        <i data-lucide="save" class="w-4 h-4"></i>
+      </button>
+    </td>
+  </tr>`;
+}
+
+function attachRowHandlers(tr, key) {
+  const onInput = () => {
+    const meta = state.metadata[key];
+    if (!meta) return;
+    meta.title = tr.querySelector(".fld-title").value;
+    meta.created_date = tr.querySelector(".fld-created-date").value;
+    meta.author = tr.querySelector(".fld-author").value;
+    meta.purpose = tr.querySelector(".fld-purpose").value;
+    if (meta.error) setRowError(key, false);
+    setRowDirty(key, true);
+  };
+  tr.querySelector(".fld-title").addEventListener("input", onInput);
+  tr.querySelector(".fld-created-date").addEventListener("input", onInput);
+  tr.querySelector(".fld-author").addEventListener("input", onInput);
+  tr.querySelector(".fld-purpose").addEventListener("input", onInput);
+
+  tr.querySelector(".btn-edit").addEventListener("click", () => openMasterFile(key));
+  tr.querySelector(".btn-extract").addEventListener("click", () => {
+    addLog(`自動入力機能は未実装です（PR4 で実装予定）: ${key}`, "warn");
+  });
+  tr.querySelector(".btn-save").addEventListener("click", () => saveRow(key));
+}
+
+async function openMasterFile(key) {
+  const root = $("root").value.trim();
+  if (!root) {
+    addLog("ルートフォルダを入力してください。", "warn");
+    return;
+  }
+  addLog(`処理開始: ${key} を Word で開く`, "info");
+  try {
+    await apiCall("POST", "/api/master/open", { root_folder: root, normalized_key: key });
+    addLog(`✅ ファイルを開きました: ${key}`, "ok");
+  } catch (e) {
+    addLog(`❌ ファイルを開けませんでした: ${key}（理由: ${e.message}）`, "err");
+  }
+}
+
+async function saveRow(key) {
+  const root = $("root").value.trim();
+  if (!root) {
+    addLog("ルートフォルダを入力してください。", "warn");
+    return;
+  }
+  const meta = state.metadata[key];
+  if (!meta || !meta.dirty || meta.saving) return;
+  setRowSaving(key, true);
+  addLog(`処理開始: ${key} の保存`, "info");
+  try {
+    const saved = await apiCall(
+      "PUT",
+      `/api/metadata/${encodeURIComponent(key)}`,
+      {
+        root_folder: root,
+        title: meta.title,
+        created_date: meta.created_date,
+        author: meta.author,
+        purpose: meta.purpose,
+        source: "user",
+      }
+    );
+    meta.title = saved.title;
+    meta.created_date = saved.created_date;
+    meta.author = saved.author;
+    meta.purpose = saved.purpose;
+    setRowSaving(key, false);
+    setRowError(key, false);
+    setRowDirty(key, false);
+    addLog(`✅ 保存完了: ${key}`, "ok");
+  } catch (e) {
+    setRowSaving(key, false);
+    setRowError(key, true);
+    addLog(`❌ 保存失敗: ${key}（理由: ${e.message}）`, "err");
+  }
+}
+
 async function refreshTable() {
   const root = $("root").value.trim();
   const body = $("tbl-body");
   if (!root) {
-    body.innerHTML = '<tr><td colspan="5" class="border border-gray-300 p-3 text-center text-gray-500">ルートフォルダを設定してください。</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="border border-gray-300 p-3 text-center text-gray-500">ルートフォルダを設定してください。</td></tr>';
+    setLegendVisible(false);
+    state.metadata = {};
     return;
   }
+  let masterEntries;
   try {
     const d = await apiCall("GET", `/api/master?root_folder=${encodeURIComponent(root)}`);
-    if (!d.entries.length) {
-      body.innerHTML = '<tr><td colspan="5" class="border border-gray-300 p-3 text-center text-gray-500">個別マスタにファイルがありません。</td></tr>';
-      return;
-    }
-    body.innerHTML = d.entries.map(e => {
-      const id = e.normalized_marker || `<span class="text-yellow-700">${escapeHtml(e.filename)} (番号不明)</span>`;
-      return `<tr class="bg-white hover:bg-gray-50">
-        <td class="border border-gray-300 p-2 font-medium">${id}</td>
-        <td class="border border-gray-300 p-2">${escapeHtml(e.filename)}</td>
-        <td class="border border-gray-300 p-2 text-gray-400">-</td>
-        <td class="border border-gray-300 p-2 text-gray-400">-</td>
-        <td class="border border-gray-300 p-2 text-gray-400">-</td>
-      </tr>`;
-    }).join("");
+    masterEntries = d.entries;
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="5" class="border border-gray-300 p-3 text-center text-red-600">読み込み失敗: ${escapeHtml(e.message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="border border-gray-300 p-3 text-center text-red-600">読み込み失敗: ${escapeHtml(e.message)}</td></tr>`;
+    setLegendVisible(false);
+    state.metadata = {};
+    return;
   }
+  if (!masterEntries.length) {
+    body.innerHTML = '<tr><td colspan="8" class="border border-gray-300 p-3 text-center text-gray-500">個別マスタにファイルがありません。</td></tr>';
+    setLegendVisible(false);
+    state.metadata = {};
+    return;
+  }
+
+  let metaEntries = {};
+  try {
+    const m = await apiCall("GET", `/api/metadata?root_folder=${encodeURIComponent(root)}`);
+    metaEntries = m.entries || {};
+  } catch (e) {
+    addLog(`メタデータの読み込みに失敗しました（空として続行します）: ${e.message}`, "warn");
+  }
+
+  const nextMetadata = {};
+  const rows = [];
+  for (const e of masterEntries) {
+    if (!e.normalized_marker) {
+      // 番号不明の行は編集不可。既存表示と同様の警告のみ
+      rows.push(`<tr class="bg-white hover:bg-gray-50 border-l-4 border-l-transparent">
+        <td class="border border-gray-300 p-2 text-center text-gray-300">-</td>
+        <td class="border border-gray-300 p-2 text-center text-gray-300">-</td>
+        <td class="border border-gray-300 p-2"><span class="text-yellow-700">${escapeHtml(e.filename)}（番号不明）</span></td>
+        <td class="border border-gray-300 p-2 text-gray-400" colspan="4">編集できません</td>
+        <td class="border border-gray-300 p-2 text-center text-gray-300">-</td>
+      </tr>`);
+      continue;
+    }
+    const key = e.normalized_marker;
+    const src = metaEntries[key] || {};
+    nextMetadata[key] = {
+      title: src.title || "",
+      created_date: src.created_date || "",
+      author: src.author || "",
+      purpose: src.purpose || "",
+      dirty: false,
+      saving: false,
+      error: false,
+    };
+    rows.push(buildRowHtml(key, escapeHtml(key)));
+  }
+  state.metadata = nextMetadata;
+  body.innerHTML = rows.join("");
+  setLegendVisible(true);
+
+  // 行毎にイベントを束ねる
+  for (const key of Object.keys(state.metadata)) {
+    const tr = getRowEl(key);
+    if (tr) attachRowHandlers(tr, key);
+  }
+
+  if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
 }
 $("btn-refresh-table").addEventListener("click", refreshTable);
 
