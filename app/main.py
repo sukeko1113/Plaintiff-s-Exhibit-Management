@@ -10,6 +10,9 @@
 - POST /api/merge       : 結合
 - POST /api/split       : 分解
 - GET  /api/master      : 個別マスタ一覧
+- GET  /api/metadata           : 証拠説明書 metadata.json を返却 (routers/metadata_router.py)
+- PUT  /api/metadata/{key}     : 1 行分のメタデータを保存 (同上)
+- POST /api/master/open        : 個別マスタファイルを既定アプリで開く (同上)
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from app.merge_service import (
     ensure_folders,
     merge_kogo,
 )
+from app.routers import metadata_router
 from app.settings import AppSettings, load_settings, save_settings
 from app.split_service import split_kogo
 
@@ -46,6 +50,8 @@ app = FastAPI(title="甲号証管理システム")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+app.include_router(metadata_router.router)
 
 
 # ---------------------------------------------------------------------------
