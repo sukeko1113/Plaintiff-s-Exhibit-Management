@@ -86,17 +86,30 @@
           <table class="w-full text-sm text-left border-collapse border border-gray-300">
             <thead class="bg-gray-100 text-gray-700">
               <tr>
+                <th class="border border-gray-300 p-2 whitespace-nowrap text-center w-16">編集</th>
+                <th class="border border-gray-300 p-2 whitespace-nowrap text-center w-20">自動入力</th>
                 <th class="border border-gray-300 p-2 whitespace-nowrap">号証</th>
-                <th class="border border-gray-300 p-2 min-w-[200px]">標目（証拠の名称）</th>
-                <th class="border border-gray-300 p-2 whitespace-nowrap">作成年月日</th>
-                <th class="border border-gray-300 p-2 whitespace-nowrap">作成者</th>
-                <th class="border border-gray-300 p-2 min-w-[300px]">立証趣旨（証明事項）</th>
+                <th class="border border-gray-300 p-2 min-w-[180px]">標目</th>
+                <th class="border border-gray-300 p-2 whitespace-nowrap min-w-[140px]">作成年月日</th>
+                <th class="border border-gray-300 p-2 whitespace-nowrap min-w-[140px]">作成者</th>
+                <th class="border border-gray-300 p-2 min-w-[280px]">立証趣旨</th>
+                <th class="border border-gray-300 p-2 whitespace-nowrap text-center w-16">保存</th>
               </tr>
             </thead>
             <tbody id="tbl-body">
-              <tr><td colspan="5" class="border border-gray-300 p-3 text-center text-gray-500">ルートフォルダを設定してください。</td></tr>
+              <tr><td colspan="8" class="border border-gray-300 p-3 text-center text-gray-500">ルートフォルダを設定してください。</td></tr>
             </tbody>
           </table>
+        </div>
+        <div id="tbl-legend" class="mt-3 hidden items-center space-x-4 text-xs text-gray-500">
+          <span class="flex items-center">
+            <span class="inline-block w-1 h-3 bg-orange-400 mr-1"></span>
+            未保存の編集あり
+          </span>
+          <span class="flex items-center">
+            <span class="inline-block w-1 h-3 bg-red-500 mr-1"></span>
+            エラー
+          </span>
         </div>
       </section>
 
@@ -151,7 +164,7 @@
 const $ = (id) => document.getElementById(id);
 
 // --- ログ管理 ----------------------------------------------------------
-const state = { logs: [] };
+const state = { logs: [], rows: {} };
 function addLog(message, type = "info") {
   const time = new Date().toLocaleTimeString();
   state.logs.unshift({ time, message, type });
@@ -363,35 +376,249 @@ $("modal-ok").addEventListener("click", () => {
   if (a) a();
 });
 
-// --- 証拠説明書プレビューテーブル -------------------------------------
-async function refreshTable() {
+// --- 証拠説明書テーブル -----------------------------------------------
+function hasUnsavedRows() {
+  return Object.values(state.rows).some(r => r && r.dirty);
+}
+
+function setLegendVisible(visible) {
+  const el = $("tbl-legend");
+  if (!el) return;
+  if (visible) {
+    el.classList.remove("hidden");
+    el.classList.add("flex");
+  } else {
+    el.classList.add("hidden");
+    el.classList.remove("flex");
+  }
+}
+
+function getRowState(key) {
+  if (!state.rows[key]) state.rows[key] = { dirty: false, saving: false, error: false };
+  return state.rows[key];
+}
+
+function applyRowVisualState(key) {
+  const tr = document.querySelector(`tr[data-key="${cssEscape(key)}"]`);
+  if (!tr) return;
+  const r = getRowState(key);
+  tr.classList.remove("border-l-4", "border-l-orange-400", "border-l-red-500", "border-l-transparent");
+  if (r.error) {
+    tr.classList.add("border-l-4", "border-l-red-500");
+  } else if (r.dirty) {
+    tr.classList.add("border-l-4", "border-l-orange-400");
+  } else {
+    tr.classList.add("border-l-4", "border-l-transparent");
+  }
+  const saveBtn = tr.querySelector('button[data-action="save"]');
+  if (saveBtn && !saveBtn.dataset.permanentlyDisabled) {
+    saveBtn.disabled = !r.dirty || r.saving;
+  }
+}
+
+function cssEscape(s) {
+  if (window.CSS && window.CSS.escape) return window.CSS.escape(s);
+  return String(s).replace(/["\\]/g, "\\$&");
+}
+
+async function refreshTable(opts = {}) {
+  const force = opts.force === true;
+  if (!force && hasUnsavedRows()) {
+    const ok = window.confirm("未保存の編集があります。再読込すると、保存していない内容は失われます。続行しますか?");
+    if (!ok) return;
+  }
+
   const root = $("root").value.trim();
   const body = $("tbl-body");
   if (!root) {
-    body.innerHTML = '<tr><td colspan="5" class="border border-gray-300 p-3 text-center text-gray-500">ルートフォルダを設定してください。</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="border border-gray-300 p-3 text-center text-gray-500">ルートフォルダを設定してください。</td></tr>';
+    state.rows = {};
+    setLegendVisible(false);
     return;
   }
   try {
-    const d = await apiCall("GET", `/api/master?root_folder=${encodeURIComponent(root)}`);
-    if (!d.entries.length) {
-      body.innerHTML = '<tr><td colspan="5" class="border border-gray-300 p-3 text-center text-gray-500">個別マスタにファイルがありません。</td></tr>';
+    const [master, metaResp] = await Promise.all([
+      apiCall("GET", `/api/master?root_folder=${encodeURIComponent(root)}`),
+      apiCall("GET", `/api/metadata?root_folder=${encodeURIComponent(root)}`),
+    ]);
+    if (!master.entries.length) {
+      body.innerHTML = '<tr><td colspan="8" class="border border-gray-300 p-3 text-center text-gray-500">個別マスタにファイルがありません。</td></tr>';
+      state.rows = {};
+      setLegendVisible(false);
       return;
     }
-    body.innerHTML = d.entries.map(e => {
-      const id = e.normalized_marker || `<span class="text-yellow-700">${escapeHtml(e.filename)} (番号不明)</span>`;
-      return `<tr class="bg-white hover:bg-gray-50">
-        <td class="border border-gray-300 p-2 font-medium">${id}</td>
-        <td class="border border-gray-300 p-2">${escapeHtml(e.filename)}</td>
-        <td class="border border-gray-300 p-2 text-gray-400">-</td>
-        <td class="border border-gray-300 p-2 text-gray-400">-</td>
-        <td class="border border-gray-300 p-2 text-gray-400">-</td>
-      </tr>`;
-    }).join("");
+    const entries = (metaResp && metaResp.entries) || {};
+    state.rows = {};
+    body.innerHTML = master.entries.map(e => renderRow(e, entries[e.normalized_marker])).join("");
+    setLegendVisible(true);
+    if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="5" class="border border-gray-300 p-3 text-center text-red-600">読み込み失敗: ${escapeHtml(e.message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="border border-gray-300 p-3 text-center text-red-600">読み込み失敗: ${escapeHtml(e.message)}</td></tr>`;
+    state.rows = {};
+    setLegendVisible(false);
   }
 }
-$("btn-refresh-table").addEventListener("click", refreshTable);
+
+function renderRow(entry, meta) {
+  const key = entry.normalized_marker || "";
+  const hasKey = !!key;
+  const m = meta || {};
+  const title = m.title || "";
+  const created = m.created_date || "";
+  const author = m.author || "";
+  const purpose = m.purpose || "";
+  const idCell = hasKey
+    ? escapeHtml(key)
+    : `<span class="text-yellow-700">${escapeHtml(entry.filename)} (番号不明)</span>`;
+  const dis = hasKey ? "" : "disabled";
+  const keyAttr = escapeHtml(key);
+
+  if (hasKey) state.rows[key] = { dirty: false, saving: false, error: false };
+
+  return `<tr class="bg-white hover:bg-gray-50 border-l-4 border-l-transparent" data-key="${keyAttr}">
+    <td class="border border-gray-300 p-2 text-center">
+      <button type="button" data-action="edit" data-key="${keyAttr}" ${dis}
+        class="p-2 rounded hover:bg-blue-50 text-blue-600 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+        title="Word で開く">
+        <i data-lucide="edit-3" class="w-4 h-4"></i>
+      </button>
+    </td>
+    <td class="border border-gray-300 p-2 text-center">
+      <button type="button" data-action="extract" data-key="${keyAttr}" ${dis}
+        class="p-2 rounded hover:bg-indigo-50 text-indigo-600 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+        title="AI による自動入力(PR4 で実装予定)">
+        <i data-lucide="sparkles" class="w-4 h-4"></i>
+      </button>
+    </td>
+    <td class="border border-gray-300 p-2 font-medium whitespace-nowrap">${idCell}</td>
+    <td class="border border-gray-300 p-1">
+      <input type="text" data-field="title" data-key="${keyAttr}" value="${escapeHtml(title)}" ${dis}
+        class="w-full p-1 border border-transparent hover:border-gray-300 focus:border-blue-400 focus:outline-none rounded disabled:bg-gray-50" />
+    </td>
+    <td class="border border-gray-300 p-1">
+      <input type="text" data-field="created_date" data-key="${keyAttr}" value="${escapeHtml(created)}" ${dis}
+        class="w-full p-1 border border-transparent hover:border-gray-300 focus:border-blue-400 focus:outline-none rounded disabled:bg-gray-50" />
+    </td>
+    <td class="border border-gray-300 p-1">
+      <input type="text" data-field="author" data-key="${keyAttr}" value="${escapeHtml(author)}" ${dis}
+        class="w-full p-1 border border-transparent hover:border-gray-300 focus:border-blue-400 focus:outline-none rounded disabled:bg-gray-50" />
+    </td>
+    <td class="border border-gray-300 p-1">
+      <textarea data-field="purpose" data-key="${keyAttr}" rows="3" ${dis}
+        class="w-full p-1 border border-transparent hover:border-gray-300 focus:border-blue-400 focus:outline-none rounded resize-y disabled:bg-gray-50">${escapeHtml(purpose)}</textarea>
+    </td>
+    <td class="border border-gray-300 p-2 text-center">
+      <button type="button" data-action="save" data-key="${keyAttr}" data-permanently-disabled="${hasKey ? "" : "1"}" disabled
+        class="p-2 rounded hover:bg-green-50 text-green-600 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+        title="保存">
+        <i data-lucide="save" class="w-4 h-4"></i>
+      </button>
+    </td>
+  </tr>`;
+}
+
+function readRowFields(key) {
+  const tr = document.querySelector(`tr[data-key="${cssEscape(key)}"]`);
+  if (!tr) return null;
+  const get = (f) => {
+    const el = tr.querySelector(`[data-field="${f}"]`);
+    return el ? el.value : "";
+  };
+  return {
+    title: get("title"),
+    created_date: get("created_date"),
+    author: get("author"),
+    purpose: get("purpose"),
+  };
+}
+
+function setButtonSpinner(btn, spinning) {
+  if (!btn) return;
+  if (spinning) {
+    btn.dataset.iconHtml = btn.innerHTML;
+    btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>';
+    btn.disabled = true;
+    if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+  } else {
+    if (btn.dataset.iconHtml) {
+      btn.innerHTML = btn.dataset.iconHtml;
+      delete btn.dataset.iconHtml;
+      if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+    }
+  }
+}
+
+async function onClickEdit(key, btn) {
+  const root = getRoot();
+  if (!root) return;
+  setButtonSpinner(btn, true);
+  try {
+    await apiCall("POST", "/api/master/open", { root_folder: root, normalized_key: key });
+    addLog(`個別マスタを開きました: ${key}`, "ok");
+  } catch (e) {
+    addLog(`個別マスタを開けませんでした: ${key} — ${e.message}`, "err");
+  } finally {
+    setButtonSpinner(btn, false);
+    btn.disabled = false;
+  }
+}
+
+function onClickExtract(key) {
+  addLog(`自動入力機能は未実装です(PR4 で実装予定): ${key}`, "warn");
+}
+
+async function onClickSave(key, btn) {
+  const root = getRoot();
+  if (!root) return;
+  const fields = readRowFields(key);
+  if (!fields) return;
+  const r = getRowState(key);
+  r.saving = true;
+  setButtonSpinner(btn, true);
+  try {
+    const url = `/api/metadata/${encodeURIComponent(key)}`;
+    const resp = await apiCall("PUT", url, { root_folder: root, ...fields, source: "user" });
+    r.dirty = false;
+    r.error = false;
+    r.saving = false;
+    setButtonSpinner(btn, false);
+    applyRowVisualState(key);
+    const ts = resp && resp.updated_at ? `(${resp.updated_at})` : "";
+    addLog(`保存しました: ${key} ${ts}`.trim(), "ok");
+  } catch (e) {
+    r.saving = false;
+    r.error = true;
+    setButtonSpinner(btn, false);
+    btn.disabled = false;
+    applyRowVisualState(key);
+    addLog(`保存失敗: ${key} — ${e.message}`, "err");
+  }
+}
+
+// イベント委任 (tbody 1 度だけ)
+$("tbl-body").addEventListener("input", (ev) => {
+  const t = ev.target;
+  if (!t || !t.dataset || !t.dataset.field) return;
+  const key = t.dataset.key;
+  if (!key) return;
+  const r = getRowState(key);
+  r.dirty = true;
+  r.error = false;
+  applyRowVisualState(key);
+});
+
+$("tbl-body").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-action]");
+  if (!btn) return;
+  const key = btn.dataset.key;
+  if (!key) return;
+  const action = btn.dataset.action;
+  if (action === "edit") onClickEdit(key, btn);
+  else if (action === "extract") onClickExtract(key);
+  else if (action === "save") onClickSave(key, btn);
+});
+
+$("btn-refresh-table").addEventListener("click", () => refreshTable());
 
 // --- 起動時 ------------------------------------------------------------
 loadInitialSettings().then(() => {
