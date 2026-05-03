@@ -378,7 +378,16 @@ $("modal-ok").addEventListener("click", () => {
 
 // --- 証拠説明書テーブル -----------------------------------------------
 function hasUnsavedRows() {
-  return Object.values(state.rows).some(r => r && r.dirty);
+  // 1) state.rows をチェック
+  if (Object.values(state.rows).some(r => r && r.dirty)) return true;
+  // 2) DOM ベースの保険: state.rows が同期ずれを起こしても見落とさない
+  const body = $("tbl-body");
+  if (body && body.querySelector("tr.border-l-orange-400, tr.border-l-red-500")) return true;
+  return false;
+}
+
+function confirmDiscardUnsaved() {
+  return window.confirm("未保存の編集があります。再読込すると、保存していない内容は失われます。続行しますか?");
 }
 
 function setLegendVisible(visible) {
@@ -424,8 +433,7 @@ function cssEscape(s) {
 async function refreshTable(opts = {}) {
   const force = opts.force === true;
   if (!force && hasUnsavedRows()) {
-    const ok = window.confirm("未保存の編集があります。再読込すると、保存していない内容は失われます。続行しますか?");
-    if (!ok) return;
+    if (!confirmDiscardUnsaved()) return;
   }
 
   const root = $("root").value.trim();
@@ -618,7 +626,14 @@ $("tbl-body").addEventListener("click", (ev) => {
   else if (action === "save") onClickSave(key, btn);
 });
 
-$("btn-refresh-table").addEventListener("click", () => refreshTable());
+function handleRefreshClick() {
+  if (hasUnsavedRows()) {
+    if (!confirmDiscardUnsaved()) return;
+  }
+  // 既にここで確認済みなので force:true で内側の二重確認をスキップ
+  refreshTable({ force: true });
+}
+$("btn-refresh-table").addEventListener("click", handleRefreshClick);
 
 // --- 起動時 ------------------------------------------------------------
 loadInitialSettings().then(() => {
