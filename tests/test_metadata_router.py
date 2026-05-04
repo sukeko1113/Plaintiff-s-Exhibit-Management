@@ -286,3 +286,75 @@ def test_master_open_rejects_path_traversal(
     # ファイルを開く処理は実行されない
     assert not mock_run.called
     assert not mock_startfile.called
+
+
+def test_master_open_happy_path_with_branch_number(
+    client: TestClient, tmp_path: Path
+) -> None:
+    # SPEC §7.1.4 の枝番付き正規化ファイル名("甲第００１号証その２")でも
+    # 正しくファイルを解決できることを確認する。
+    root = tmp_path / "case"
+    master = root / MASTER_DIRNAME
+    master.mkdir(parents=True)
+    target = master / "甲第００１号証その２.docx"
+    target.write_bytes(b"dummy docx")
+
+    with patch("app.routers.metadata_router.subprocess.run") as mock_run, \
+         patch("app.routers.metadata_router.os.startfile", create=True) as mock_startfile:
+        r = client.post(
+            "/api/master/open",
+            json={"root_folder": str(root), "normalized_key": "甲第００１号証その２"},
+        )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["opened"] is True
+    assert Path(body["path"]) == target.resolve()
+    assert mock_run.called or mock_startfile.called
+
+
+def test_master_open_rejects_bracketed_marker_as_404(
+    client: TestClient, tmp_path: Path
+) -> None:
+    # SPEC §10.6.4 / §7.1.4: normalized_key はブラケットなしのファイル名であり、
+    # 本文用マーカー(SPEC §7.1.3, "【...】")を送られた場合は対応するファイルが
+    # 存在しない(実ファイルはブラケットなし)ため 404 を返す。
+    # この挙動を固定するためのリグレッションテスト。
+    root = tmp_path / "case"
+    master = root / MASTER_DIRNAME
+    master.mkdir(parents=True)
+    # ブラケットなしの実ファイルは存在する
+    (master / "甲第００１号証.docx").write_bytes(b"dummy docx")
+
+    with patch("app.routers.metadata_router.subprocess.run") as mock_run, \
+         patch("app.routers.metadata_router.os.startfile", create=True) as mock_startfile:
+        r = client.post(
+            "/api/master/open",
+            json={"root_folder": str(root), "normalized_key": "【甲第００１号証】"},
+        )
+
+    assert r.status_code == 404
+    assert not mock_run.called
+    assert not mock_startfile.called
+
+
+def test_master_open_returns_404_for_unknown_key(
+    client: TestClient, tmp_path: Path
+) -> None:
+    # 個別マスタフォルダは存在するが、リクエストされたキーに対応する
+    # ファイルが存在しない場合は 404 を返す。
+    root = tmp_path / "case"
+    master = root / MASTER_DIRNAME
+    master.mkdir(parents=True)
+    (master / "甲第００１号証.docx").write_bytes(b"dummy docx")
+
+    with patch("app.routers.metadata_router.subprocess.run") as mock_run, \
+         patch("app.routers.metadata_router.os.startfile", create=True) as mock_startfile:
+        r = client.post(
+            "/api/master/open",
+            json={"root_folder": str(root), "normalized_key": "甲第９９９号証"},
+        )
+
+    assert r.status_code == 404
+    assert not mock_run.called
+    assert not mock_startfile.called

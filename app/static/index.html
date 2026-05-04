@@ -457,7 +457,11 @@ async function refreshTable(opts = {}) {
     }
     const entries = (metaResp && metaResp.entries) || {};
     state.rows = {};
-    body.innerHTML = master.entries.map(e => renderRow(e, entries[e.normalized_marker])).join("");
+    // メタデータ参照キーは SPEC §10.6.2 / §7.1.4 のブラケットなし正規化ファイル名で統一する。
+    body.innerHTML = master.entries.map(e => {
+      const lookupKey = e.normalized_marker ? e.filename.replace(/\.docx$/i, "") : "";
+      return renderRow(e, lookupKey ? entries[lookupKey] : undefined);
+    }).join("");
     setLegendVisible(true);
     if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
   } catch (e) {
@@ -468,15 +472,18 @@ async function refreshTable(opts = {}) {
 }
 
 function renderRow(entry, meta) {
-  const key = entry.normalized_marker || "";
-  const hasKey = !!key;
+  // 内部識別子 key は SPEC §7.1.4 のブラケットなし正規化ファイル名(filename から拡張子を除いたもの)。
+  // 表示用 displayMarker は SPEC §7.1.3 のブラケット付きマーカー。
+  const hasKey = !!entry.normalized_marker;
+  const key = hasKey ? entry.filename.replace(/\.docx$/i, "") : "";
+  const displayMarker = entry.normalized_marker || "";
   const m = meta || {};
   const title = m.title || "";
   const created = m.created_date || "";
   const author = m.author || "";
   const purpose = m.purpose || "";
   const idCell = hasKey
-    ? escapeHtml(key)
+    ? escapeHtml(displayMarker)
     : `<span class="text-yellow-700">${escapeHtml(entry.filename)} (番号不明)</span>`;
   const dis = hasKey ? "" : "disabled";
   const keyAttr = escapeHtml(key);
