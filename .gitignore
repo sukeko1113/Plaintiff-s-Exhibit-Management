@@ -24,3 +24,4 @@ Thumbs.db
 # 訴訟データ(絶対にコミットしない)
 *.docx
 data/
+metadata.json
