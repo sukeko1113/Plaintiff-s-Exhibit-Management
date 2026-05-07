@@ -93,6 +93,7 @@ class SplitResult(BaseModel):
 class MasterEntryModel(BaseModel):
     filename: str
     normalized_marker: Optional[str]
+    normalized_key: Optional[str]
     main: Optional[int]
     branch: Optional[int]
     size_bytes: int

@@ -158,3 +158,24 @@ def test_master_endpoint_returns_listing(client: TestClient, tmp_path: Path) -> 
     d = r.json()
     mains = [e["main"] for e in d["entries"]]
     assert mains == [1, 3]
+    keys = [e["normalized_key"] for e in d["entries"]]
+    assert keys == ["甲第００１号証", "甲第００３号証"]
+
+
+def test_master_endpoint_returns_normalized_key_none_for_unrecognized(
+    client: TestClient, tmp_path: Path
+) -> None:
+    root = tmp_path / "case"
+    ensure_folders(root)
+    from docx import Document
+    bad = root / MASTER_DIRNAME / "memo.docx"
+    d = Document()
+    d.add_paragraph("メモ")
+    d.save(str(bad))
+
+    r = client.get("/api/master", params={"root_folder": str(root)})
+    assert r.status_code == 200
+    body = r.json()
+    bad_entry = next(e for e in body["entries"] if e["filename"] == "memo.docx")
+    assert bad_entry["normalized_key"] is None
+    assert bad_entry["normalized_marker"] is None

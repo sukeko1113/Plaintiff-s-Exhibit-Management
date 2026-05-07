@@ -279,8 +279,9 @@ GET /api/master?root_folder=C:\Users...
     "master_dir": "C:\\...\\個別マスタ",
     "entries": [
       {
-        "filename": "甲第001号証.docx",
-        "normalized_marker": "甲001",
+        "filename": "甲第００１号証.docx",
+        "normalized_marker": "【甲第００１号証】",
+        "normalized_key": "甲第００１号証",
         "main": 1,
         "branch": null,
         "size_bytes": 12345
@@ -289,7 +290,8 @@ GET /api/master?root_folder=C:\Users...
     "warnings": []
   }
 ```
-  - `normalized_marker`: 正規化された甲号証番号
+  - `normalized_marker`: SPEC §7.1.3 のブラケット付き正規化マーカー(本文用)
+  - `normalized_key`: SPEC §7.1.4 のブラケットなし正規化キー(`path.stem`)。番号不明時は `null`
   - `main`: 主番号(例:甲第1号証 → 1)
   - `branch`: 枝番号(例:甲第1号証の2 → 2)
 - **エラー:** ルートが存在しない → HTTP 400
@@ -507,7 +509,7 @@ class KogoNumber:
 | 項目 | 解消した内容 |
 |---|---|
 | `app/static/index.html` の構成 | 単一 HTML(タブ付き UI)。`v01-UI.md` を仕様の正本とする。 |
-| `app/master_service.py` の詳細 | `MasterEntry` は filename / normalized_marker / main / branch / size_bytes を持つ。詳細は §6.3 で別途追記予定。 |
+| `app/master_service.py` の詳細 | `MasterEntry` は filename / normalized_marker / normalized_key / main / branch / size_bytes を持つ。詳細は §6.3 で別途追記予定。 |
 | `app/split_evidence_docx.py` のページ境界判定 | §6.2.3 にアルゴリズムを正式記載。 |
 | `app/merge_kogo_shoko.py` の `prepare_and_merge` | §6.1 と本ファイルの該当節で記述済み。docxcompose を使用。 |
 | 「証拠説明書」関連 | 現実装には存在しない。将来追加の場合は別 PR。 |

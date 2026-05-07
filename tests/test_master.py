@@ -48,6 +48,35 @@ def test_list_master_skips_temp_files(tmp_path: Path) -> None:
     assert [e.filename for e in listing.entries] == ["甲第００１号証.docx"]
 
 
+def test_list_master_normalized_key_present(tmp_path: Path) -> None:
+    """detect_number 成功時、normalized_key は path.stem(SPEC §7.1.4 形式)を持つ。"""
+    root = tmp_path / "case"
+    ensure_folders(root)
+    master = root / MASTER_DIRNAME
+    make_kogo_docx(master / "甲第００１号証.docx", "【甲第１号証】")
+    make_kogo_docx(master / "甲第００２号証その３.docx", "【甲第２号証その３】")
+
+    listing = list_master(root)
+    keys = [e.normalized_key for e in listing.entries]
+    assert keys == ["甲第００１号証", "甲第００２号証その３"]
+
+
+def test_list_master_normalized_key_none_when_unrecognized(tmp_path: Path) -> None:
+    """番号不明ファイルでは normalized_key が None になる。"""
+    root = tmp_path / "case"
+    ensure_folders(root)
+    master = root / MASTER_DIRNAME
+    from docx import Document
+    bad = master / "memo.docx"
+    d = Document()
+    d.add_paragraph("メモ")
+    d.save(str(bad))
+
+    listing = list_master(root)
+    bad_entry = next(e for e in listing.entries if e.filename == "memo.docx")
+    assert bad_entry.normalized_key is None
+
+
 def test_list_master_unrecognized_filename_warns(tmp_path: Path) -> None:
     root = tmp_path / "case"
     ensure_folders(root)
