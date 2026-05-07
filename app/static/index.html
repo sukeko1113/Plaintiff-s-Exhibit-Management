@@ -457,9 +457,9 @@ async function refreshTable(opts = {}) {
     }
     const entries = (metaResp && metaResp.entries) || {};
     state.rows = {};
-    // メタデータ参照キーは SPEC §10.6.2 / §7.1.4 のブラケットなし正規化ファイル名で統一する。
+    // メタデータ参照キーは SPEC §10.6.2 / §7.1.4 のブラケットなし正規化キー(/api/master が返す normalized_key)。
     body.innerHTML = master.entries.map(e => {
-      const lookupKey = e.normalized_marker ? e.filename.replace(/\.docx$/i, "") : "";
+      const lookupKey = e.normalized_key || "";
       return renderRow(e, lookupKey ? entries[lookupKey] : undefined);
     }).join("");
     setLegendVisible(true);
@@ -472,10 +472,10 @@ async function refreshTable(opts = {}) {
 }
 
 function renderRow(entry, meta) {
-  // 内部識別子 key は SPEC §7.1.4 のブラケットなし正規化ファイル名(filename から拡張子を除いたもの)。
+  // 内部識別子 key は SPEC §7.1.4 のブラケットなし正規化キー(/api/master が返す normalized_key)。
   // 表示用 displayMarker は SPEC §7.1.3 のブラケット付きマーカー。
-  const hasKey = !!entry.normalized_marker;
-  const key = hasKey ? entry.filename.replace(/\.docx$/i, "") : "";
+  const hasKey = !!entry.normalized_key;
+  const key = entry.normalized_key || "";
   const displayMarker = entry.normalized_marker || "";
   const m = meta || {};
   const title = m.title || "";
